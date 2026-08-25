@@ -1,26 +1,49 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --amber-red: #c8102e;
+  --amber-red-dark: #9a0c23;
+  --amber-red-light: #e83a52;
+  --amber-cream: #fff8f7;
+  --amber-ink: #1a1214;
+  --amber-muted: #6b5a5e;
+  --amber-panel: #ffffff;
+  --amber-border: #f0d6db;
+  --background: var(--amber-cream);
+  --foreground: var(--amber-ink);
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-amber-red: var(--amber-red);
+  --color-amber-red-dark: var(--amber-red-dark);
+  --color-amber-red-light: var(--amber-red-light);
+  --color-amber-cream: var(--amber-cream);
+  --color-amber-ink: var(--amber-ink);
+  --color-amber-muted: var(--amber-muted);
+  --color-amber-panel: var(--amber-panel);
+  --color-amber-border: var(--amber-border);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans), system-ui, sans-serif;
+}
+
+@keyframes ring-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(200, 16, 46, 0.45);
+  }
+  50% {
+    box-shadow: 0 0 0 18px rgba(200, 16, 46, 0);
+  }
+}
+
+.ring-pulse {
+  animation: ring-pulse 1.2s ease-out infinite;
 }

@@ -1,36 +1,106 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Amber IT AI Helpline Demo
 
-## Getting Started
+Pitch-ready browser softphone + supervisor dashboard. **Nusrat** answers via Gemini Live native audio (bn-BD / Bangla / English / Banglish). Mock Amber IT customers, bills, outages, and tickets — not a live BTRC number.
 
-First, run the development server:
+Companion docs: [docs/PRODUCT_PLAN.md](docs/PRODUCT_PLAN.md) · [docs/DEV_PLAN.md](docs/DEV_PLAN.md)
+
+## Quick start
+
+1. **Install**
+
+```bash
+npm install
+```
+
+2. **API key** — Google AI Studio key with Live / native-audio access:
+
+```bash
+cp .env.local.example .env.local
+# edit .env.local → set GEMINI_API_KEY=...
+```
+
+3. **Run** (Next.js on `:3000` + live proxy on `:3001`):
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+4. **Two-window demo**
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- Caller: [http://localhost:3000/call](http://localhost:3000/call)
+- Supervisor: [http://localhost:3000/ops](http://localhost:3000/ops)
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Allow microphone on the caller window. Click **Call** → ring → Nusrat greets.
 
-## Learn More
+## Pitch script
 
-To learn more about Next.js, take a look at the following resources:
+1. Bangla: “Internet nai, ONU te lal light.” (CID `AIT-100234` / `01711001234`) → Gulshan outage + ticket id spoken  
+2. English: “What’s my bill?” → amount + bKash / Nagad / Rocket / myswift  
+3. “Upgrade to 200 Mbps.” → ৳2000 + 5% VAT (৳2100), commercial ticket  
+4. Barge-in while she is talking → she stops and continues  
+5. “I want a human.” → handoff card on `/ops`
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Presenter toggles on `/ops`: **Gulshan outage**, **force unpaid bill**.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Architecture
 
-## Deploy on Vercel
+```
+Softphone (16 kHz PCM) → server/live-proxy.ts → Gemini Live native audio
+                              ↓ tool calls
+                         lib/agent + mock Amber IT + RAG (lib/rag)
+                              ↓ events
+                         Supervisor /ops
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+| Path | Role |
+|------|------|
+| `app/call` | Softphone UI |
+| `app/ops` | Supervisor dashboard |
+| `server/live-proxy.ts` | WebSocket proxy + tools + session bus |
+| `lib/agent/amber-agent.ts` | Nusrat instructions + tool schemas |
+| `lib/rag/*` | Support KB corpus + embeddings + `searchKnowledge` |
+| `lib/voice/gemini-live.ts` | Gemini setup / PCM helpers |
+| `lib/mock/*` | Customers, tickets, outages, scene |
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+RAG indexes curated Amber IT support chunks at proxy startup (Gemini `text-embedding-004`, cached under `.cache/`). Lexical fallback if embeddings fail.
+
+API key never leaves the proxy (`GEMINI_API_KEY`).
+
+## Demo customer cheat sheet
+
+| CID | Phone | Area | Notes |
+|-----|-------|------|-------|
+| AIT-100234 | 01711001234 | Gulshan | Primary pitch (outage / unpaid) — 125 Mbps |
+| AIT-100891 | 01812004567 | Badda | Paid / online |
+| AIT-101402 | 01913007890 | Dhanmondi | Overdue bill — 200 Mbps |
+| AIT-102033 | 01614001122 | Banani | |
+| AIT-103210 | 01515003344 | Mirpur | Power off ONU — 20 Mbps |
+| AIT-104555 | 01716005566 | Uttara | |
+| AIT-105777 | 01817007788 | Mohammadpur | 250 Mbps |
+
+New connection → sales **09611-933933**.
+
+## Env
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `GEMINI_API_KEY` | — | Required for voice (+ RAG embeddings) |
+| `GEMINI_LIVE_MODEL` | `gemini-2.5-flash-native-audio-latest` | |
+| `GEMINI_LIVE_VOICE` | `Sulafat` | Warm female voice |
+| `GEMINI_EMBED_MODEL` | `text-embedding-004` | RAG vectors |
+| `LIVE_PROXY_PORT` | `3001` | |
+| `NEXT_PUBLIC_LIVE_PROXY_URL` | `ws://localhost:3001` | Browser → proxy |
+
+## Phase 2 — IP-PBX (not in this build)
+
+Reuse the same 16 kHz PCM path and `lib/agent`. Real DID hits Amber IT IP-PBX; AI is a SIP endpoint; `escalateToHuman` becomes a queue transfer. CDR/recording stay on the PBX.
+
+## Scripts
+
+- `npm run dev` — Next + live proxy  
+- `npm run dev:next` / `npm run dev:proxy` — run separately  
+- `npm run build` — production Next build  
+
+## Out of scope
+
+IP-PBX / SIP, live myswift or ticketing APIs, production SLA / PCI / call recording retention, OpenAI realtime toggle.
