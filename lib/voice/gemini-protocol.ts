@@ -31,6 +31,13 @@ export function buildToolResponseMessage(
 
 /** Ask Nusrat to speak the greeting after setup completes. */
 export function buildGreetingNudge() {
+  return buildSystemNudge(
+    "Softphone just connected. Pick up like a real Amber IT care agent: warm greeting only, one short breath, then wait for the caller. Sound human, not scripted.",
+  );
+}
+
+/** Generic system turn for Live (repeat prompt, goodbye, etc.). */
+export function buildSystemNudge(text: string) {
   return {
     clientContent: {
       turns: [
@@ -38,7 +45,9 @@ export function buildGreetingNudge() {
           role: "user",
           parts: [
             {
-              text: "[system] Softphone just connected. Pick up like a real Amber IT care agent: warm greeting only, one short breath, then wait for the caller. Sound human, not scripted.",
+              text: text.startsWith("[system]")
+                ? text
+                : `[system] ${text}`,
             },
           ],
         },

@@ -46,6 +46,7 @@ export type BrowserToProxy =
   | { type: "barge_in" }
   | { type: "mute"; muted: boolean }
   | { type: "hangup" }
+  | { type: "nudge"; text: string }
   | {
       type: "set_scene";
       gulshanOutage?: boolean;

@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "concurrently -k -n next,proxy -c red,cyan \"next dev\" \"tsx server/live-proxy.ts\"",
+    "dev": "concurrently -k -n next,proxy -c red,cyan \"next dev\" \"tsx watch server/live-proxy.ts\"",
     "dev:next": "next dev",
-    "dev:proxy": "tsx server/live-proxy.ts",
+    "dev:proxy": "tsx watch server/live-proxy.ts",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"

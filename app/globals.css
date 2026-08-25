@@ -47,3 +47,61 @@ body {
 .ring-pulse {
   animation: ring-pulse 1.2s ease-out infinite;
 }
+
+@keyframes talk-ripple {
+  0% {
+    transform: scale(0.72);
+    opacity: 0.65;
+  }
+  100% {
+    transform: scale(1.35);
+    opacity: 0;
+  }
+}
+
+@keyframes listen-ripple {
+  0%,
+  100% {
+    transform: scale(0.92);
+    opacity: 0.28;
+  }
+  50% {
+    transform: scale(1.12);
+    opacity: 0.5;
+  }
+}
+
+.talk-ripple {
+  pointer-events: none;
+  position: absolute;
+  inset: 12%;
+  border-radius: 9999px;
+  border: 2px solid currentColor;
+  animation: talk-ripple 1.45s cubic-bezier(0.22, 0.61, 0.36, 1) infinite;
+}
+
+.talk-ripple-delay {
+  animation-delay: 0.48s;
+}
+
+.talk-ripple-delay-2 {
+  animation-delay: 0.96s;
+}
+
+.talk-ripple-agent {
+  color: rgba(232, 58, 82, 0.9);
+}
+
+.talk-ripple-user {
+  color: rgba(52, 211, 153, 0.95);
+}
+
+.talk-ripple-listen {
+  color: rgba(255, 220, 225, 0.55);
+  animation-name: listen-ripple;
+  animation-duration: 2.4s;
+  animation-timing-function: ease-in-out;
+  border-width: 1.5px;
+}
+
+

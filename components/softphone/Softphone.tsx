@@ -17,6 +17,22 @@ const BARGE_IN_NOISE_RATIO = 4.5;
 const BARGE_IN_FRAMES = 5;
 /** Ignore barge-in right after she starts talking (greeting / short answers). */
 const BARGE_IN_GRACE_MS = 1200;
+/** UI mic activity (softer than barge-in) — ripple only, not silence logic. */
+const USER_TALK_RMS = 0.018;
+/** Keep agent “talking” UI briefly between audio chunks. */
+const AGENT_TALK_HOLD_MS = 280;
+/** Keep user “talking” UI briefly after level drops. */
+const USER_TALK_HOLD_MS = 220;
+/** Only uplink / count speech above this when agent is quiet (filters room noise). */
+const SPEECH_GATE_RMS = 0.045;
+/** Need this many loud frames (~32ms) before counting as real user speech. */
+const SPEECH_GATE_FRAMES = 6;
+/** After agent stops, wait this long for user speech before repeating. */
+const USER_SILENCE_MS = 7000;
+/** How many times to re-ask before ending the call. */
+const MAX_SILENCE_REPEATS = 2;
+/** After goodbye nudge, hang up. */
+const SILENCE_HANGUP_DELAY_MS = 4500;
 
 export function Softphone() {
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -34,17 +50,32 @@ export function Softphone() {
   const noiseFloorRef = useRef(0.01);
   /** When current agent utterance started playing */
   const agentUtteranceAtRef = useRef(0);
+  const userRmsRef = useRef(0);
+  const userRmsSmoothRef = useRef(0);
+  const agentHoldUntilRef = useRef(0);
+  const userHoldUntilRef = useRef(0);
+  const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hangupTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const silenceRepeatsRef = useRef(0);
+  const heardAgentRef = useRef(false);
+  const endingForSilenceRef = useRef(false);
+  const silenceDeadlineRef = useRef<number | null>(null);
+  const speechGateFramesRef = useRef(0);
+  const intentionalSpeechUntilRef = useRef(0);
   const [muted, setMuted] = useState(false);
   const [captions, setCaptions] = useState(false);
   const [micError, setMicError] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState(0);
+  const [agentTalking, setAgentTalking] = useState(false);
+  const [userTalking, setUserTalking] = useState(false);
   const connectedAtRef = useRef<number | null>(null);
 
   const isAgentPlaying = useCallback(() => {
     const ctx = audioCtxRef.current;
     if (!ctx) return sourcesRef.current.length > 0;
     return (
-      sourcesRef.current.length > 0 || nextPlayTimeRef.current > ctx.currentTime + 0.05
+      sourcesRef.current.length > 0 ||
+      nextPlayTimeRef.current > ctx.currentTime + 0.05
     );
   }, []);
 
@@ -60,6 +91,7 @@ export function Softphone() {
     sourcesRef.current = [];
     nextPlayTimeRef.current = 0;
     bargeLoudFramesRef.current = 0;
+    setAgentTalking(false);
   }, []);
 
   const ensureAudio = useCallback(async () => {
@@ -105,12 +137,15 @@ export function Softphone() {
       src.start(startAt);
       nextPlayTimeRef.current = startAt + buffer.duration;
       sourcesRef.current.push(src);
+      agentHoldUntilRef.current = Date.now() + AGENT_TALK_HOLD_MS;
+      setAgentTalking(true);
       if (wasSilent) {
         agentUtteranceAtRef.current = Date.now();
         bargeLoudFramesRef.current = 0;
       }
       src.onended = () => {
         sourcesRef.current = sourcesRef.current.filter((s) => s !== src);
+        agentHoldUntilRef.current = Date.now() + AGENT_TALK_HOLD_MS;
       };
     },
     [ensureAudio],
@@ -156,17 +191,44 @@ export function Softphone() {
       const source = captureCtx.createMediaStreamSource(stream);
       const node = new AudioWorkletNode(captureCtx, "pcm-capture");
       node.port.onmessage = (ev) => {
-        if (mutedRef.current) return;
+        if (mutedRef.current) {
+          userRmsRef.current = 0;
+          userRmsSmoothRef.current *= 0.85;
+          speechGateFramesRef.current = 0;
+          return;
+        }
         const payload = ev.data as { pcm: ArrayBuffer; rms: number };
         const rms = payload.rms ?? 0;
+        userRmsRef.current = rms;
+        userRmsSmoothRef.current =
+          userRmsSmoothRef.current * 0.65 + rms * 0.35;
         const ab = payload.pcm;
         const agentPlaying = isAgentPlayingRef.current();
 
         if (!agentPlaying) {
           noiseFloorRef.current =
-            noiseFloorRef.current * 0.95 + rms * 0.05;
+            noiseFloorRef.current * 0.97 + Math.min(rms, 0.04) * 0.03;
           bargeLoudFramesRef.current = 0;
+
+          const floor = Math.max(0.008, noiseFloorRef.current);
+          const speechLike =
+            rms >= SPEECH_GATE_RMS && rms >= floor + 0.028;
+          if (speechLike) {
+            speechGateFramesRef.current += 1;
+            if (speechGateFramesRef.current >= SPEECH_GATE_FRAMES) {
+              intentionalSpeechUntilRef.current = Date.now() + 800;
+            }
+          } else {
+            speechGateFramesRef.current = 0;
+          }
+
+          // Don't stream room noise to Gemini — she waits forever on hiss
+          if (speechGateFramesRef.current < SPEECH_GATE_FRAMES) {
+            return;
+          }
         } else {
+          // Speaker echo must not look like the caller talking
+          speechGateFramesRef.current = 0;
           const floor = Math.max(0.008, noiseFloorRef.current);
           const loudEnough =
             rms >= BARGE_IN_RMS_MIN && rms >= floor * BARGE_IN_NOISE_RATIO;
@@ -186,6 +248,7 @@ export function Softphone() {
           if (barged) {
             lastBargeAtRef.current = Date.now();
             bargeLoudFramesRef.current = 0;
+            intentionalSpeechUntilRef.current = Date.now() + 800;
             clearPlaybackRef.current();
             ignoreAgentUntilRef.current = Date.now() + 500;
             sendRef.current({ type: "barge_in" });
@@ -223,6 +286,10 @@ export function Softphone() {
     void captureCtxRef.current?.close();
     captureCtxRef.current = null;
     micActiveRef.current = false;
+    userRmsRef.current = 0;
+    userRmsSmoothRef.current = 0;
+    speechGateFramesRef.current = 0;
+    setUserTalking(false);
   }, []);
 
   useEffect(() => {
@@ -231,12 +298,65 @@ export function Softphone() {
       try {
         const ctx = new AudioContext({ sampleRate: 16000 });
         await ctx.audioWorklet.addModule("/audio-worklet-pcm-capture.js");
-        await ctx.close();
+        if (ctx.state !== "closed") {
+          await ctx.close().catch(() => undefined);
+        }
       } catch {
         /* ignore — startMic will retry */
       }
     })();
   }, []);
+
+  const clearSilenceTimers = useCallback(() => {
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+    if (hangupTimerRef.current) {
+      clearTimeout(hangupTimerRef.current);
+      hangupTimerRef.current = null;
+    }
+    silenceDeadlineRef.current = null;
+  }, []);
+
+  const resetSilenceWatch = useCallback(() => {
+    clearSilenceTimers();
+    silenceRepeatsRef.current = 0;
+    heardAgentRef.current = false;
+    endingForSilenceRef.current = false;
+    speechGateFramesRef.current = 0;
+    intentionalSpeechUntilRef.current = 0;
+  }, [clearSilenceTimers]);
+
+  const fireSilenceAction = useCallback(() => {
+    if (endingForSilenceRef.current) return;
+    if (isAgentPlayingRef.current()) return;
+
+    if (silenceRepeatsRef.current < MAX_SILENCE_REPEATS) {
+      silenceRepeatsRef.current += 1;
+      const n = silenceRepeatsRef.current;
+      sendRef.current({
+        type: "nudge",
+        text:
+          n === 1
+            ? 'Caller silent. Say exactly this vibe in Bangla/Banglish (one short line), then briefly repeat your last question and wait: "কিছু শুনতে পাচ্ছি না স্যার, আবার একটু বলবেন প্লিজ?" Do not add new topics.'
+            : 'Still silent. Again say: "কিছু শুনতে পাচ্ছি না, আবার একটু বলবেন প্লিজ?" then repeat the same last question once, very briefly, and wait.',
+      });
+      return;
+    }
+
+    endingForSilenceRef.current = true;
+    sendRef.current({
+      type: "nudge",
+      text: 'Caller never responded. Say a short goodbye like "ঠিক আছে স্যার, পরে কল করবেন, ধন্যবাদ" and stop. No more questions.',
+    });
+    hangupTimerRef.current = setTimeout(() => {
+      hangupTimerRef.current = null;
+      sendRef.current({ type: "hangup" });
+      stopMic();
+      clearPlayback();
+    }, SILENCE_HANGUP_DELAY_MS);
+  }, [stopMic, clearPlayback]);
 
   useEffect(() => {
     if (state.status === "connected" || state.status === "parked") {
@@ -250,10 +370,13 @@ export function Softphone() {
     ) {
       stopMic();
       clearPlayback();
+      resetSilenceWatch();
       connectedAtRef.current = null;
       setElapsed(0);
+      setAgentTalking(false);
+      setUserTalking(false);
     }
-  }, [state.status, startMic, stopMic, clearPlayback]);
+  }, [state.status, startMic, stopMic, clearPlayback, resetSilenceWatch]);
 
   useEffect(() => {
     if (!(state.status === "connected" || state.status === "parked")) return;
@@ -261,17 +384,66 @@ export function Softphone() {
       if (connectedAtRef.current) {
         setElapsed(Math.floor((Date.now() - connectedAtRef.current) / 1000));
       }
-    }, 500);
+      const now = Date.now();
+      const agentActive =
+        isAgentPlayingRef.current() || now < agentHoldUntilRef.current;
+      setAgentTalking(agentActive);
+
+      // Soft ripple only — does NOT drive silence / hangup
+      const level = userRmsSmoothRef.current;
+      const floor = Math.max(0.006, noiseFloorRef.current);
+      const rippleSpeech =
+        !mutedRef.current &&
+        !agentActive &&
+        level >= USER_TALK_RMS &&
+        level >= floor + 0.012;
+      if (rippleSpeech) {
+        userHoldUntilRef.current = now + USER_TALK_HOLD_MS;
+      }
+      setUserTalking(
+        (!agentActive && rippleSpeech) || now < userHoldUntilRef.current,
+      );
+
+      // Silence watchdog — only intentional speech (gated) resets the timer
+      if (endingForSilenceRef.current) return;
+      if (state.status !== "connected") return;
+
+      if (agentActive) {
+        heardAgentRef.current = true;
+        silenceDeadlineRef.current = null;
+        return;
+      }
+
+      const intentional = now < intentionalSpeechUntilRef.current;
+      if (intentional) {
+        silenceRepeatsRef.current = 0;
+        silenceDeadlineRef.current = null;
+        return;
+      }
+
+      if (!heardAgentRef.current) return;
+
+      if (silenceDeadlineRef.current == null) {
+        silenceDeadlineRef.current = now + USER_SILENCE_MS;
+        return;
+      }
+
+      if (now >= silenceDeadlineRef.current) {
+        silenceDeadlineRef.current = null;
+        fireSilenceAction();
+      }
+    }, 100);
     return () => clearInterval(id);
-  }, [state.status]);
+  }, [state.status, fireSilenceAction]);
 
   useEffect(() => {
     return () => {
       stopMic();
       clearPlayback();
+      clearSilenceTimers();
       void audioCtxRef.current?.close();
     };
-  }, [stopMic, clearPlayback]);
+  }, [stopMic, clearPlayback, clearSilenceTimers]);
 
   const phase: SoftphonePhase =
     state.status === "error"
@@ -300,6 +472,12 @@ export function Softphone() {
     const next = !muted;
     setMuted(next);
     send({ type: "mute", muted: next });
+    if (next) {
+      userRmsRef.current = 0;
+      userRmsSmoothRef.current = 0;
+      userHoldUntilRef.current = 0;
+      setUserTalking(false);
+    }
   };
 
   const formatTime = (s: number) => {
@@ -314,9 +492,31 @@ export function Softphone() {
     captions &&
     [...state.transcript].reverse().find((l) => l.role === "nusrat")?.text;
 
+  const talkMode: "idle" | "ring" | "listen" | "user" | "agent" =
+    phase === "ringing"
+      ? "ring"
+      : phase === "connected"
+        ? agentTalking
+          ? "agent"
+          : userTalking
+            ? "user"
+            : "listen"
+        : "idle";
+
+  const talkHint =
+    talkMode === "agent"
+      ? "Nusrat speaking…"
+      : talkMode === "user"
+        ? "You're speaking…"
+        : talkMode === "listen"
+          ? "Listening…"
+          : talkMode === "ring"
+            ? "Ringing…"
+            : null;
+
   return (
     <div className="mx-auto flex w-full max-w-md flex-col items-center gap-8">
-      <div className="w-full rounded-[2rem] border border-amber-border bg-gradient-to-b from-[#2a1218] to-[#1a0a0e] p-8 text-white shadow-xl">
+      <div className="w-full overflow-visible rounded-[2rem] border border-amber-border bg-gradient-to-b from-[#2a1218] to-[#1a0a0e] p-8 text-white shadow-xl">
         <p className="text-center text-xs uppercase tracking-[0.25em] text-rose-200/70">
           Amber IT Helpline
         </p>
@@ -334,17 +534,61 @@ export function Softphone() {
           {phase === "error" && "Call error"}
         </p>
 
-        <div className="mt-10 flex justify-center">
-          <div
-            className={`flex h-28 w-28 items-center justify-center rounded-full bg-amber-red text-3xl font-bold ${
-              phase === "ringing" ? "ring-pulse" : ""
-            }`}
-          >
-            {phase === "connected" ? "●" : "☎"}
+        <div className="mt-8 flex justify-center py-4">
+          <div className="relative flex h-40 w-40 items-center justify-center">
+            {talkMode === "listen" && (
+              <>
+                <span className="talk-ripple talk-ripple-listen" />
+                <span className="talk-ripple talk-ripple-listen talk-ripple-delay" />
+              </>
+            )}
+            {(talkMode === "ring" || talkMode === "agent") && (
+              <>
+                <span className="talk-ripple talk-ripple-agent" />
+                <span className="talk-ripple talk-ripple-agent talk-ripple-delay" />
+                <span className="talk-ripple talk-ripple-agent talk-ripple-delay-2" />
+              </>
+            )}
+            {talkMode === "user" && (
+              <>
+                <span className="talk-ripple talk-ripple-user" />
+                <span className="talk-ripple talk-ripple-user talk-ripple-delay" />
+                <span className="talk-ripple talk-ripple-user talk-ripple-delay-2" />
+              </>
+            )}
+            <div
+              className={`relative z-10 flex h-28 w-28 items-center justify-center rounded-full bg-amber-red text-3xl font-bold ${
+                talkMode === "ring" ? "ring-pulse" : ""
+              } ${
+                talkMode === "user"
+                  ? "shadow-[0_0_32px_rgba(52,211,153,0.45)]"
+                  : talkMode === "agent" || talkMode === "ring"
+                    ? "shadow-[0_0_32px_rgba(232,58,82,0.45)]"
+                    : talkMode === "listen"
+                      ? "shadow-[0_0_22px_rgba(255,255,255,0.12)]"
+                      : ""
+              }`}
+            >
+              {phase === "connected" || phase === "ringing" ? "●" : "☎"}
+            </div>
           </div>
         </div>
 
-        <div className="mt-10 flex items-center justify-center gap-4">
+        {talkHint && (
+          <p
+            className={`text-center text-xs font-medium tracking-wide ${
+              talkMode === "agent" || talkMode === "ring"
+                ? "text-rose-200"
+                : talkMode === "user"
+                  ? "text-emerald-300"
+                  : "text-rose-100/55"
+            }`}
+          >
+            {talkHint}
+          </p>
+        )}
+
+        <div className="mt-8 flex items-center justify-center gap-4">
           {phase === "idle" || phase === "ended" || phase === "error" ? (
             <button
               type="button"

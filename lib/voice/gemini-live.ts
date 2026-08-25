@@ -7,6 +7,7 @@ import {
 import {
   buildAudioClientMessage,
   buildGreetingNudge,
+  buildSystemNudge,
   buildToolResponseMessage,
   parseGeminiMessage,
   type GeminiServerMessage,
@@ -15,6 +16,7 @@ import {
 export {
   buildAudioClientMessage,
   buildGreetingNudge,
+  buildSystemNudge,
   buildToolResponseMessage,
   parseGeminiMessage,
 };

@@ -15,6 +15,7 @@ import {
   buildGreetingNudge,
   buildGeminiLiveUrl,
   buildSetupMessage,
+  buildSystemNudge,
   buildToolResponseMessage,
   parseGeminiMessage,
 } from "../lib/voice/gemini-live";
@@ -363,6 +364,19 @@ function handleBrowserMessage(ws: WebSocket, raw: string) {
       muted = msg.muted;
       break;
     }
+    case "nudge": {
+      if (callStatus !== "connected" && callStatus !== "parked") {
+        console.warn("[live-proxy] nudge ignored, status=", callStatus);
+        return;
+      }
+      if (gemini && gemini.readyState === WebSocket.OPEN) {
+        console.log("[live-proxy] nudge → gemini");
+        gemini.send(JSON.stringify(buildSystemNudge(msg.text)));
+      } else {
+        console.warn("[live-proxy] nudge: gemini not open");
+      }
+      break;
+    }
     case "hangup": {
       closeGemini();
       setStatus("ended");
@@ -387,7 +401,11 @@ function handleBrowserMessage(ws: WebSocket, raw: string) {
       break;
     }
     default:
-      send(ws, { type: "error", message: "Unknown message type" });
+      console.warn("[live-proxy] unknown message", (msg as { type?: string }).type);
+      send(ws, {
+        type: "error",
+        message: `Unknown message type: ${(msg as { type?: string }).type || "?"}`,
+      });
   }
 }
 

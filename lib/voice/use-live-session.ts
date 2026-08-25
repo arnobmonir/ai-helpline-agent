@@ -13,6 +13,7 @@ import {
   buildAudioClientMessage,
   buildGreetingNudge,
   buildToolResponseMessage,
+  buildSystemNudge,
   parseGeminiMessage,
 } from "@/lib/voice/gemini-protocol";
 
@@ -337,6 +338,20 @@ export function useLiveSession(
         }
         case "mute": {
           mutedRef.current = msg.muted;
+          break;
+        }
+        case "nudge": {
+          if (
+            statusRef.current !== "connected" &&
+            statusRef.current !== "parked"
+          ) {
+            return;
+          }
+          if (geminiRef.current?.readyState === WebSocket.OPEN) {
+            geminiRef.current.send(
+              JSON.stringify(buildSystemNudge(msg.text)),
+            );
+          }
           break;
         }
         case "hangup": {
