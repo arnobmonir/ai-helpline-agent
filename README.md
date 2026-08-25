@@ -25,12 +25,12 @@ cp .env.local.example .env.local
 npm run dev
 ```
 
-4. **Two-window demo**
+4. **Demo**
 
-- Caller: [http://localhost:3000/call](http://localhost:3000/call)
-- Supervisor: [http://localhost:3000/ops](http://localhost:3000/ops)
+- Softphone: [http://localhost:3000](http://localhost:3000)
+- Top-right **Demo CIDs** for dummy customers (pitch: `AIT-100234`)
 
-Allow microphone on the caller window. Click **Call** → ring → Nusrat greets.
+Allow microphone. Click **Call** → ring → Nusrat greets.
 
 ## Pitch script
 
@@ -38,9 +38,9 @@ Allow microphone on the caller window. Click **Call** → ring → Nusrat greets
 2. English: “What’s my bill?” → amount + bKash / Nagad / Rocket / myswift  
 3. “Upgrade to 200 Mbps.” → ৳2000 + 5% VAT (৳2100), commercial ticket  
 4. Barge-in while she is talking → she stops and continues  
-5. “I want a human.” → handoff card on `/ops`
+5. “I want a human.” → call parks for handoff
 
-Presenter toggles on `/ops`: **Gulshan outage**, **force unpaid bill**.
+Use top-right **Demo CIDs** for dummy accounts.
 
 ## Architecture
 
@@ -48,21 +48,18 @@ Presenter toggles on `/ops`: **Gulshan outage**, **force unpaid bill**.
 Softphone (16 kHz PCM) → server/live-proxy.ts → Gemini Live native audio
                               ↓ tool calls
                          lib/agent + mock Amber IT + RAG (lib/rag)
-                              ↓ events
-                         Supervisor /ops
 ```
 
 | Path | Role |
 |------|------|
-| `app/call` | Softphone UI |
-| `app/ops` | Supervisor dashboard |
+| `app/page` (`/`) | Softphone + Demo CIDs |
 | `server/live-proxy.ts` | WebSocket proxy + tools + session bus |
 | `lib/agent/amber-agent.ts` | Nusrat instructions + tool schemas |
 | `lib/rag/*` | Support KB corpus + embeddings + `searchKnowledge` |
 | `lib/voice/gemini-live.ts` | Gemini setup / PCM helpers |
 | `lib/mock/*` | Customers, tickets, outages, scene |
 
-RAG indexes curated Amber IT support chunks at proxy startup (Gemini `text-embedding-004`, cached under `.cache/`). Lexical fallback if embeddings fail.
+RAG indexes curated Amber IT support chunks at proxy startup (Gemini `gemini-embedding-001`, cached under `.cache/`). Lexical fallback if embeddings fail.
 
 API key never leaves the proxy (`GEMINI_API_KEY`).
 
@@ -87,7 +84,8 @@ New connection → sales **09611-933933**.
 | `GEMINI_API_KEY` | — | Required for voice (+ RAG embeddings) |
 | `GEMINI_LIVE_MODEL` | `gemini-2.5-flash-native-audio-latest` | |
 | `GEMINI_LIVE_VOICE` | `Sulafat` | Warm female voice |
-| `GEMINI_EMBED_MODEL` | `text-embedding-004` | RAG vectors |
+| `GEMINI_AFFECTIVE_DIALOG` | `false` | Off = lower latency |
+| `GEMINI_EMBED_MODEL` | `gemini-embedding-001` | RAG vectors |
 | `LIVE_PROXY_PORT` | `3001` | |
 | `NEXT_PUBLIC_LIVE_PROXY_URL` | `ws://localhost:3001` | Browser → proxy |
 

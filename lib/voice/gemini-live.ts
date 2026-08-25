@@ -11,7 +11,8 @@ const DEFAULT_WS_ALPHA =
   "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent";
 
 export function isAffectiveDialogEnabled(): boolean {
-  return (process.env.GEMINI_AFFECTIVE_DIALOG || "true").toLowerCase() !== "false";
+  // Off by default — affective dialog adds latency; set GEMINI_AFFECTIVE_DIALOG=true to enable.
+  return (process.env.GEMINI_AFFECTIVE_DIALOG || "false").toLowerCase() === "true";
 }
 
 export function buildGeminiLiveUrl(apiKey: string): string {
@@ -35,6 +36,10 @@ export function buildSetupMessage(options?: {
       model: `models/${model}`,
       generationConfig: {
         responseModalities: ["AUDIO"],
+        // Lower input media fidelity → less token work / snappier turns
+        mediaResolution: "MEDIA_RESOLUTION_LOW",
+        // Gemini 2.5 native-audio: disable thinking for lowest latency
+        thinkingConfig: { thinkingBudget: 0 },
         speechConfig: {
           voiceConfig: {
             prebuiltVoiceConfig: {
@@ -48,7 +53,7 @@ export function buildSetupMessage(options?: {
         parts: [{ text: NUSRAT_SYSTEM_INSTRUCTION }],
       },
       tools: AGENT_TOOLS,
-      inputAudioTranscription: {},
+      // Skip input/output transcription — saves cost + latency (captions stay optional/off)
       realtimeInputConfig: {
         automaticActivityDetection: {
           disabled: false,

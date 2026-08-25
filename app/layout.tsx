@@ -14,8 +14,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Amber IT AI Helpline",
-  description:
-    "Pitch demo: Gemini Live softphone + supervisor dashboard for Amber IT support",
+  description: "Pitch demo: Gemini Live softphone for Amber IT support",
 };
 
 export default function RootLayout({

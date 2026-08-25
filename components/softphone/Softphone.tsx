@@ -140,7 +140,7 @@ export function Softphone() {
     try {
       setMicError(null);
       await ensureAudio();
-      const captureCtx = new AudioContext();
+      const captureCtx = new AudioContext({ sampleRate: 16000 });
       captureCtxRef.current = captureCtx;
       await captureCtx.audioWorklet.addModule("/audio-worklet-pcm-capture.js");
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -149,6 +149,7 @@ export function Softphone() {
           noiseSuppression: true,
           autoGainControl: true,
           channelCount: 1,
+          sampleRate: 16000,
         },
       });
       mediaStreamRef.current = stream;
@@ -222,6 +223,19 @@ export function Softphone() {
     void captureCtxRef.current?.close();
     captureCtxRef.current = null;
     micActiveRef.current = false;
+  }, []);
+
+  useEffect(() => {
+    // Preload worklet so the first Call is snappier
+    void (async () => {
+      try {
+        const ctx = new AudioContext({ sampleRate: 16000 });
+        await ctx.audioWorklet.addModule("/audio-worklet-pcm-capture.js");
+        await ctx.close();
+      } catch {
+        /* ignore — startMic will retry */
+      }
+    })();
   }, []);
 
   useEffect(() => {
@@ -410,10 +424,7 @@ export function Softphone() {
 
       <p className="text-center text-xs text-amber-muted">
         To interrupt: speak clearly for a moment while she talks. Headphones
-        help.{" "}
-        <a href="/ops" className="font-medium text-amber-red hover:underline">
-          /ops
-        </a>
+        help.
       </p>
     </div>
   );

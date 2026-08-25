@@ -1,10 +1,10 @@
 /**
  * Gemini text embeddings for RAG.
- * Uses text-embedding-004 via REST (same GEMINI_API_KEY).
+ * Uses gemini-embedding-001 via REST (same GEMINI_API_KEY).
  */
 
 const EMBED_MODEL =
-  process.env.GEMINI_EMBED_MODEL || "text-embedding-004";
+  process.env.GEMINI_EMBED_MODEL || "gemini-embedding-001";
 
 export async function embedTexts(
   texts: string[],
