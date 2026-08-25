@@ -17,12 +17,12 @@ Pitch-ready Amber IT helpline demo. Gemini Live native audio (bn-BD) answers in 
 
 Two pages that can run side by side on one laptop:
 
-1. **Caller** (`/call`) — looks like dialing **09611-123123**. Ring → Nusrat picks up. Mute / hang up. Captions off by default.
-2. **Supervisor** (`/ops`) — live transcript, tool calls, customer card, tickets. Presenter toggles: Gulshan outage, unpaid bill. This is the screen Amber IT management watches.
+1. **Caller** (`/` — `/call` redirects here) — looks like dialing **09611-123123**. Ring → Nusrat picks up. Mute / hang up. Captions off by default.
+2. **Supervisor** (`/ops`) — live transcript, tool calls, customer card, tickets. Presenter toggles: Gulshan outage, unpaid bill, ANI known. This is the screen Amber IT management watches.
 
 Agent **Nusrat** (warm female Gemini voice, e.g. Sulafat):
 
-- Greeting: *“Amber IT, assalamu alaikum, ami Nusrat. Apnake kivabe help korte pari?”*
+- Greeting: *“আসসালামু আলাইকুম। Amber IT Customer Care থেকে নুসরাত বলছি। আপনাকে কীভাবে হেল্প করতে পারি?”*
 - Short turns, confirm CID or registered mobile, then act
 - Never volunteer “I am an AI”
 
@@ -53,7 +53,7 @@ flowchart LR
 - `getBill` — due amount, due date, pay via bKash / Nagad / Rocket / myswift
 - `checkAreaOutage` — e.g. Gulshan PON down + ETA
 - `createTicket` — complaint id read back to the caller
-- `listPackages` — MINOR+ 20 Mbps ৳500 … POSITIVE+ 250 Mbps ৳2500 (+5% VAT)
+- `listPackages` — Home 20 Mbps ৳500 … 250 Mbps ৳2500 (+5% VAT)
 - `escalateToHuman` — parks the call; ops shows a handoff card. Phase 2: SIP transfer to a live queue
 
 ### Mock world
@@ -64,7 +64,7 @@ flowchart LR
 
 1. Bangla: “Internet nai, ONU te lal light.” → outage found, ticket id spoken
 2. English: “What’s my bill?” → amount + bKash Pay Bill path
-3. “Upgrade to 200 Mbps.” → CONFIDENT+ ৳2000 + VAT, commercial ticket
+3. “Upgrade to 200 Mbps.” → 200 Mbps ৳2000 + 5% VAT (৳2100), commercial ticket
 4. Barge-in while she is talking → she stops and continues
 5. “I want a human.” → handoff on `/ops`
 
@@ -85,8 +85,8 @@ Reuse the same 16 kHz PCM + `lib/agent`. Add caller ANI into `lookupCustomer`. C
 
 ## Layout
 
-- `app/page.tsx` — home + Call
-- `app/call/page.tsx` — softphone
+- `app/page.tsx` — home + softphone
+- `app/call/page.tsx` — redirects to `/`
 - `app/ops/page.tsx` — supervisor
 - `app/api/live/route.ts` — Gemini proxy
 - `lib/agent/amber-agent.ts`

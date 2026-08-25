@@ -24,6 +24,12 @@ export interface ToolCallLog {
   at: string;
 }
 
+export interface SessionScene {
+  gulshanOutage: boolean;
+  forceUnpaidBill: boolean;
+  aniKnown: boolean;
+}
+
 export interface SessionSnapshot {
   status: CallStatus;
   error?: string;
@@ -32,10 +38,8 @@ export interface SessionSnapshot {
   customer: unknown | null;
   tickets: unknown[];
   handoff: unknown | null;
-  scene: {
-    gulshanOutage: boolean;
-    forceUnpaidBill: boolean;
-  };
+  scene: SessionScene;
+  bargeIn: boolean;
 }
 
 /** Messages browser clients send to the live proxy */
@@ -51,6 +55,7 @@ export type BrowserToProxy =
       type: "set_scene";
       gulshanOutage?: boolean;
       forceUnpaidBill?: boolean;
+      aniKnown?: boolean;
     }
   | { type: "reset_demo" }
   | { type: "get_snapshot" };
@@ -68,4 +73,5 @@ export type ProxyToBrowser =
   | { type: "ticket"; ticket: unknown }
   | { type: "handoff"; handoff: unknown }
   | { type: "scene"; scene: SessionSnapshot["scene"] }
+  | { type: "barge_in" }
   | { type: "error"; message: string };

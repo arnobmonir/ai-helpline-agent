@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { CUSTOMERS } from "@/lib/mock/customers";
-import { getScene } from "@/lib/mock/scene";
+import { getScene, setScene, resetScene } from "@/lib/mock/scene";
 import { listTickets, getHandoff } from "@/lib/mock/tickets";
 import { PACKAGES, formatPackageLine } from "@/lib/kb/packages";
 import { lookupCustomer } from "@/lib/agent/tools";
@@ -26,4 +26,29 @@ export async function GET(request: Request) {
     tickets: listTickets(),
     handoff: getHandoff(),
   });
+}
+
+export async function POST(request: Request) {
+  let body: {
+    gulshanOutage?: boolean;
+    forceUnpaidBill?: boolean;
+    aniKnown?: boolean;
+    reset?: boolean;
+  } = {};
+  try {
+    body = (await request.json()) as typeof body;
+  } catch {
+    /* empty */
+  }
+
+  if (body.reset) {
+    return NextResponse.json({ scene: resetScene() });
+  }
+
+  const scene = setScene({
+    gulshanOutage: body.gulshanOutage,
+    forceUnpaidBill: body.forceUnpaidBill,
+    aniKnown: body.aniKnown,
+  });
+  return NextResponse.json({ scene });
 }

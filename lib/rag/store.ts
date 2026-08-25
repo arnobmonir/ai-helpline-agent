@@ -25,6 +25,20 @@ export function getRagMode(): "vector" | "lexical" {
   return mode;
 }
 
+const QUERY_CACHE_MAX = 64;
+const queryVecCache = new Map<string, number[]>();
+
+function rememberQueryVec(query: string, vec: number[]) {
+  if (queryVecCache.has(query)) {
+    queryVecCache.delete(query);
+  }
+  queryVecCache.set(query, vec);
+  if (queryVecCache.size > QUERY_CACHE_MAX) {
+    const first = queryVecCache.keys().next().value;
+    if (first) queryVecCache.delete(first);
+  }
+}
+
 export async function initRag(apiKey?: string): Promise<void> {
   const corpus = buildAmberCorpus();
   indexed = corpus.map((c) => ({ ...c }));
@@ -93,13 +107,21 @@ export async function searchKnowledge(
   const q = query.trim();
   if (!q) return [];
 
+  const lexHits = lexicalSearch(q, topK);
+  const bestLex = lexHits[0]?.score ?? 0;
+  // Strong keyword match — skip embed RTT (payment, hours, packages, etc.)
+  if (mode === "lexical" || bestLex >= 0.4) {
+    return lexHits;
+  }
+
   if (mode === "vector") {
     const key = options?.apiKey || process.env.GEMINI_API_KEY || "";
     let qVec: number[];
     try {
-      qVec = await embedOne(q, key);
+      qVec = queryVecCache.get(q) || (await embedOne(q, key));
+      rememberQueryVec(q, qVec);
     } catch {
-      return lexicalSearch(q, topK);
+      return lexHits.length > 0 ? lexHits : lexicalSearch(q, topK);
     }
     const scored = indexed.map((c) => {
       const vecScore = c.vector ? cosineSimilarity(qVec, c.vector) : 0;
@@ -117,7 +139,7 @@ export async function searchKnowledge(
     }));
   }
 
-  return lexicalSearch(q, topK);
+  return lexHits;
 }
 
 function lexicalSearch(query: string, topK: number): RagHit[] {

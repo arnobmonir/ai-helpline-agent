@@ -8,7 +8,10 @@ import {
   resetTickets,
 } from "../lib/mock/tickets";
 import { getScene, resetScene, setScene } from "../lib/mock/scene";
-import { executeTool } from "../lib/agent/tools";
+import { executeTool, lookupCustomer } from "../lib/agent/tools";
+import { buildNusratInstruction } from "../lib/agent/amber-agent";
+import { CUSTOMERS, DEMO_CUSTOMER_ID } from "../lib/mock/customers";
+import { transcriptionEnabled } from "../lib/voice/live-config";
 import { initRag } from "../lib/rag/store";
 import {
   buildAudioClientMessage,
@@ -39,13 +42,13 @@ type ClientMeta = { role: ClientRole };
 
 const clients = new Map<WebSocket, ClientMeta>();
 let gemini: WebSocket | null = null;
-let toolCallPending = false;
 let callStatus: CallStatus = "idle";
 let callError: string | undefined;
 let muted = false;
 let transcript: TranscriptLine[] = [];
 let toolCalls: ToolCallLog[] = [];
 let customer: unknown | null = null;
+let bargeIn = false;
 let inputPartial = "";
 let outputPartial = "";
 let seq = 0;
@@ -65,6 +68,7 @@ function snapshot(): SessionSnapshot {
     tickets: listTickets(),
     handoff: getHandoff(),
     scene: getScene(),
+    bargeIn,
   };
 }
 
@@ -83,6 +87,37 @@ function broadcast(msg: ProxyToBrowser, only?: ClientRole) {
 
 function broadcastAll(msg: ProxyToBrowser) {
   broadcast(msg);
+}
+
+function hasOpsClient() {
+  for (const meta of clients.values()) {
+    if (meta.role === "ops") return true;
+  }
+  return false;
+}
+
+function markBargeIn() {
+  if (bargeIn) return;
+  bargeIn = true;
+  broadcastAll({ type: "barge_in" });
+}
+
+function applyToolResult(result: {
+  ok: boolean;
+  data: Record<string, unknown>;
+  events?: Array<{ type: string; payload: unknown }>;
+}) {
+  for (const ev of result.events || []) {
+    if (ev.type === "customer") {
+      customer = ev.payload;
+      broadcastAll({ type: "customer", customer: ev.payload });
+    } else if (ev.type === "ticket") {
+      broadcastAll({ type: "ticket", ticket: ev.payload });
+    } else if (ev.type === "handoff") {
+      setStatus("parked");
+      broadcastAll({ type: "handoff", handoff: ev.payload });
+    }
+  }
 }
 
 function setStatus(status: CallStatus, error?: string) {
@@ -122,6 +157,7 @@ function resetCallState(keepScene = true) {
   transcript = [];
   toolCalls = [];
   customer = null;
+  bargeIn = false;
   inputPartial = "";
   outputPartial = "";
   callError = undefined;
@@ -148,10 +184,11 @@ async function startGeminiSession(options?: { greetAfterMs?: number }) {
   closeGemini();
   // Keep UI on "ringing" until ready; only flip to connecting if ring already ended
   if (callStatus !== "ringing") setStatus("connecting");
-  toolCallPending = false;
 
   const greetAfterMs = options?.greetAfterMs ?? 0;
   const greetAt = Date.now() + greetAfterMs;
+  const scene = getScene();
+  const transcribe = transcriptionEnabled(hasOpsClient());
 
   const url = buildGeminiLiveUrl(apiKey);
   const ws = new WebSocket(url);
@@ -159,7 +196,10 @@ async function startGeminiSession(options?: { greetAfterMs?: number }) {
   let closedExpected = false;
 
   ws.on("open", () => {
-    const setup = buildSetupMessage();
+    const setup = buildSetupMessage({
+      transcription: transcribe,
+      systemInstruction: buildNusratInstruction({ aniKnown: scene.aniKnown }),
+    });
     console.log(
       "[gemini] setup model=",
       setup.setup.model,
@@ -240,45 +280,34 @@ async function startGeminiSession(options?: { greetAfterMs?: number }) {
 
     const calls = msg.toolCall?.functionCalls || [];
     if (calls.length > 0) {
-      toolCallPending = true;
-      try {
-        const responses = [];
-        for (const call of calls) {
+      const settled = await Promise.all(
+        calls.map(async (call) => {
           const name = call.name || "unknown";
           const args = (call.args || {}) as Record<string, unknown>;
           const result = await executeTool(name, args);
-
-          const entry: ToolCallLog = {
-            id: nextId("tool"),
-            name,
-            args,
-            result: result.data,
-            at: new Date().toISOString(),
-          };
-          toolCalls.push(entry);
-          broadcastAll({ type: "tool_call", entry });
-
-          for (const ev of result.events || []) {
-            if (ev.type === "customer") {
-              customer = ev.payload;
-              broadcastAll({ type: "customer", customer: ev.payload });
-            } else if (ev.type === "ticket") {
-              broadcastAll({ type: "ticket", ticket: ev.payload });
-            } else if (ev.type === "handoff") {
-              setStatus("parked");
-              broadcastAll({ type: "handoff", handoff: ev.payload });
-            }
-          }
-
-          responses.push({
-            id: call.id,
-            name,
-            response: { ...result.data, ok: result.ok },
-          });
-        }
+          return { call, name, args, result };
+        }),
+      );
+      const responses = [];
+      for (const { call, name, args, result } of settled) {
+        const entry: ToolCallLog = {
+          id: nextId("tool"),
+          name,
+          args,
+          result: result.data,
+          at: new Date().toISOString(),
+        };
+        toolCalls.push(entry);
+        broadcastAll({ type: "tool_call", entry });
+        applyToolResult(result);
+        responses.push({
+          id: call.id,
+          name,
+          response: { ...result.data, ok: result.ok },
+        });
+      }
+      if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify(buildToolResponseMessage(responses)));
-      } finally {
-        toolCallPending = false;
       }
     }
   });
@@ -336,9 +365,17 @@ function handleBrowserMessage(ws: WebSocket, raw: string) {
       transcript = [];
       toolCalls = [];
       customer = null;
+      bargeIn = false;
       clearHandoff();
       inputPartial = "";
       outputPartial = "";
+      if (getScene().aniKnown) {
+        const demo = CUSTOMERS.find((c) => c.id === DEMO_CUSTOMER_ID);
+        const looked = lookupCustomer(demo?.cid || "AIT-100234");
+        if (looked.ok && looked.data.customer) {
+          customer = looked.data.customer;
+        }
+      }
       setStatus("ringing");
       broadcastAll({ type: "snapshot", snapshot: snapshot() });
       // Connect to Gemini during the short ring (don't wait serially)
@@ -346,7 +383,7 @@ function handleBrowserMessage(ws: WebSocket, raw: string) {
       break;
     }
     case "audio": {
-      if (muted || callStatus !== "connected" || !gemini || toolCallPending) {
+      if (muted || callStatus !== "connected" || !gemini) {
         return;
       }
       if (gemini.readyState === WebSocket.OPEN) {
@@ -357,6 +394,7 @@ function handleBrowserMessage(ws: WebSocket, raw: string) {
     case "barge_in": {
       // Local barge-in: stop playback immediately. Keep forwarding mic audio
       // so Gemini automatic VAD also interrupts the model turn.
+      markBargeIn();
       broadcastAll({ type: "interrupted" });
       break;
     }
@@ -387,6 +425,7 @@ function handleBrowserMessage(ws: WebSocket, raw: string) {
       const scene = setScene({
         gulshanOutage: msg.gulshanOutage,
         forceUnpaidBill: msg.forceUnpaidBill,
+        aniKnown: msg.aniKnown,
       });
       broadcastAll({ type: "scene", scene });
       break;

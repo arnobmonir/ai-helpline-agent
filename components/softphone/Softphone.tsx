@@ -6,6 +6,12 @@ import {
   floatToBase64Pcm16,
   useLiveSession,
 } from "@/lib/voice/use-live-session";
+import {
+  HangupIcon,
+  MicIcon,
+  MicOffIcon,
+  PhoneGlyph,
+} from "@/components/softphone/icons";
 
 type SoftphonePhase = "idle" | "ringing" | "connected" | "ended" | "error";
 
@@ -18,19 +24,21 @@ const BARGE_IN_FRAMES = 5;
 /** Ignore barge-in right after she starts talking (greeting / short answers). */
 const BARGE_IN_GRACE_MS = 1200;
 /** UI mic activity (softer than barge-in) — ripple only, not silence logic. */
-const USER_TALK_RMS = 0.018;
+const USER_TALK_RMS = 0.014;
 /** Keep agent “talking” UI briefly between audio chunks. */
 const AGENT_TALK_HOLD_MS = 280;
 /** Keep user “talking” UI briefly after level drops. */
 const USER_TALK_HOLD_MS = 220;
-/** Only uplink / count speech above this when agent is quiet (filters room noise). */
-const SPEECH_GATE_RMS = 0.045;
-/** Need this many loud frames (~32ms) before counting as real user speech. */
-const SPEECH_GATE_FRAMES = 6;
-/** After agent stops, wait this long for user speech before repeating. */
-const USER_SILENCE_MS = 7000;
+/** Uplink threshold — must be close to UI ripple or Gemini never hears the caller. */
+const SPEECH_GATE_RMS = 0.014;
+/** Need this many loud frames (~32ms) before opening the uplink. */
+const SPEECH_GATE_FRAMES = 3;
+/** Keep sending audio after level dips (syllable gaps / Bangla). */
+const SPEECH_HANGOVER_MS = 1400;
+/** After agent stops, wait this long before a gentle check-in. */
+const USER_SILENCE_MS = 16000;
 /** How many times to re-ask before ending the call. */
-const MAX_SILENCE_REPEATS = 2;
+const MAX_SILENCE_REPEATS = 1;
 /** After goodbye nudge, hang up. */
 const SILENCE_HANGUP_DELAY_MS = 4500;
 
@@ -210,20 +218,31 @@ export function Softphone() {
             noiseFloorRef.current * 0.97 + Math.min(rms, 0.04) * 0.03;
           bargeLoudFramesRef.current = 0;
 
-          const floor = Math.max(0.008, noiseFloorRef.current);
+          const floor = Math.max(0.006, noiseFloorRef.current);
           const speechLike =
-            rms >= SPEECH_GATE_RMS && rms >= floor + 0.028;
+            rms >= SPEECH_GATE_RMS && rms >= floor + 0.008;
           if (speechLike) {
-            speechGateFramesRef.current += 1;
+            speechGateFramesRef.current = Math.min(
+              speechGateFramesRef.current + 1,
+              SPEECH_GATE_FRAMES,
+            );
             if (speechGateFramesRef.current >= SPEECH_GATE_FRAMES) {
-              intentionalSpeechUntilRef.current = Date.now() + 800;
+              intentionalSpeechUntilRef.current =
+                Date.now() + SPEECH_HANGOVER_MS;
             }
           } else {
-            speechGateFramesRef.current = 0;
+            speechGateFramesRef.current = Math.max(
+              0,
+              speechGateFramesRef.current - 1,
+            );
           }
 
+          const gatedOpen =
+            speechGateFramesRef.current >= SPEECH_GATE_FRAMES ||
+            Date.now() < intentionalSpeechUntilRef.current;
+
           // Don't stream room noise to Gemini — she waits forever on hiss
-          if (speechGateFramesRef.current < SPEECH_GATE_FRAMES) {
+          if (!gatedOpen) {
             return;
           }
         } else {
@@ -248,7 +267,7 @@ export function Softphone() {
           if (barged) {
             lastBargeAtRef.current = Date.now();
             bargeLoudFramesRef.current = 0;
-            intentionalSpeechUntilRef.current = Date.now() + 800;
+            intentionalSpeechUntilRef.current = Date.now() + SPEECH_HANGOVER_MS;
             clearPlaybackRef.current();
             ignoreAgentUntilRef.current = Date.now() + 500;
             sendRef.current({ type: "barge_in" });
@@ -339,8 +358,8 @@ export function Softphone() {
         type: "nudge",
         text:
           n === 1
-            ? 'Caller silent. Say exactly this vibe in Bangla/Banglish (one short line), then briefly repeat your last question and wait: "কিছু শুনতে পাচ্ছি না স্যার, আবার একটু বলবেন প্লিজ?" Do not add new topics.'
-            : 'Still silent. Again say: "কিছু শুনতে পাচ্ছি না, আবার একটু বলবেন প্লিজ?" then repeat the same last question once, very briefly, and wait.',
+            ? 'Caller has been quiet. Ask once, briefly, if they are still there (e.g. "স্যার, বলুন?") then wait. Do NOT say you cannot hear them unless the last audio was truly empty.'
+            : 'Still silent. Again say: "স্যার, আছেন?" then wait. Do not use the cannot-hear line.',
       });
       return;
     }
@@ -396,7 +415,7 @@ export function Softphone() {
         !mutedRef.current &&
         !agentActive &&
         level >= USER_TALK_RMS &&
-        level >= floor + 0.012;
+        level >= floor + 0.006;
       if (rippleSpeech) {
         userHoldUntilRef.current = now + USER_TALK_HOLD_MS;
       }
@@ -457,8 +476,9 @@ export function Softphone() {
             : "idle";
 
   const onCall = async () => {
-    await ensureAudio();
+    const ctx = await ensureAudio();
     clearPlayback();
+    playRingTone(ctx);
     send({ type: "start_call" });
   };
 
@@ -488,9 +508,11 @@ export function Softphone() {
     return `${m}:${sec}`;
   };
 
-  const latestCaption =
-    captions &&
-    [...state.transcript].reverse().find((l) => l.role === "nusrat")?.text;
+  const captionLines = captions
+    ? state.transcript
+        .filter((l) => l.role === "nusrat" || l.role === "user")
+        .slice(-8)
+    : [];
 
   const talkMode: "idle" | "ring" | "listen" | "user" | "agent" =
     phase === "ringing"
@@ -557,7 +579,7 @@ export function Softphone() {
               </>
             )}
             <div
-              className={`relative z-10 flex h-28 w-28 items-center justify-center rounded-full bg-amber-red text-3xl font-bold ${
+              className={`relative z-10 flex h-28 w-28 items-center justify-center rounded-full bg-amber-red text-white ${
                 talkMode === "ring" ? "ring-pulse" : ""
               } ${
                 talkMode === "user"
@@ -569,7 +591,7 @@ export function Softphone() {
                       : ""
               }`}
             >
-              {phase === "connected" || phase === "ringing" ? "●" : "☎"}
+              <PhoneGlyph connected={phase === "connected" || phase === "ringing"} />
             </div>
           </div>
         </div>
@@ -594,8 +616,9 @@ export function Softphone() {
               type="button"
               onClick={() => void onCall()}
               disabled={!state.connected}
-              className="rounded-full bg-emerald-500 px-8 py-3 text-sm font-semibold text-white disabled:opacity-40"
+              className="inline-flex items-center gap-2 rounded-full bg-emerald-500 px-8 py-3 text-sm font-semibold text-white disabled:opacity-40"
             >
+              <PhoneGlyph connected={false} className="h-4 w-4" />
               Call
             </button>
           ) : (
@@ -603,17 +626,19 @@ export function Softphone() {
               <button
                 type="button"
                 onClick={onToggleMute}
-                className={`rounded-full px-5 py-3 text-sm font-semibold ${
+                className={`inline-flex items-center gap-2 rounded-full px-5 py-3 text-sm font-semibold ${
                   muted ? "bg-amber-500 text-black" : "bg-white/10 text-white"
                 }`}
               >
+                {muted ? <MicOffIcon /> : <MicIcon />}
                 {muted ? "Unmute" : "Mute"}
               </button>
               <button
                 type="button"
                 onClick={onHangup}
-                className="rounded-full bg-amber-red px-8 py-3 text-sm font-semibold text-white"
+                className="inline-flex items-center gap-2 rounded-full bg-amber-red px-8 py-3 text-sm font-semibold text-white"
               >
+                <HangupIcon />
                 Hang up
               </button>
             </>
@@ -638,10 +663,29 @@ export function Softphone() {
           </button>
         </div>
 
-        {captions && latestCaption && (
-          <p className="mt-4 rounded-xl bg-black/30 p-3 text-center text-sm text-rose-50">
-            {latestCaption}
+        {captions && captionLines.length === 0 && (
+          <p className="mt-4 text-center text-xs text-rose-100/50">
+            Keep Supervisor open for live captions.
           </p>
+        )}
+        {captions && captionLines.length > 0 && (
+          <div className="mt-4 max-h-36 space-y-1.5 overflow-y-auto rounded-xl bg-black/30 p-3 text-sm">
+            {captionLines.map((line) => (
+              <p
+                key={line.id}
+                className={
+                  line.role === "nusrat"
+                    ? "text-rose-50"
+                    : "text-rose-100/70"
+                }
+              >
+                <span className="mr-1.5 text-[10px] font-semibold uppercase tracking-wide text-rose-200/60">
+                  {line.role === "nusrat" ? "Nusrat" : "You"}
+                </span>
+                {line.text}
+              </p>
+            ))}
+          </div>
         )}
       </div>
 
@@ -672,4 +716,20 @@ export function Softphone() {
       </p>
     </div>
   );
+}
+
+function playRingTone(ctx: AudioContext) {
+  const now = ctx.currentTime;
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(0.08, now);
+  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+  gain.connect(ctx.destination);
+  for (const freq of [440, 480]) {
+    const osc = ctx.createOscillator();
+    osc.type = "sine";
+    osc.frequency.value = freq;
+    osc.connect(gain);
+    osc.start(now);
+    osc.stop(now + 0.38);
+  }
 }

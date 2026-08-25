@@ -36,9 +36,11 @@ Allow microphone. Click **Call** → ring → Nusrat greets.
 
 1. Bangla: “Internet nai, ONU te lal light.” (CID `AIT-100234` / `01711001234`) → Gulshan outage + ticket id spoken  
 2. English: “What’s my bill?” → amount + bKash / Nagad / Rocket / myswift  
-3. “Upgrade to 200 Mbps.” → ৳2000 + 5% VAT (৳2100), commercial ticket  
+3. “Upgrade to 200 Mbps.” → 200 Mbps ৳2000 + 5% VAT (৳2100), commercial ticket  
 4. Barge-in while she is talking → she stops and continues  
 5. “I want a human.” → call parks for handoff
+
+Open **Supervisor** from the header (or [http://localhost:3000/ops](http://localhost:3000/ops)) in a second window. Optional **ANI known** toggle skips asking for CID on the pitch customer (`AIT-100234`).
 
 Use top-right **Demo CIDs** for dummy accounts.
 
@@ -85,6 +87,7 @@ New connection → sales **09611-933933**.
 | `GEMINI_LIVE_MODEL` | `gemini-2.5-flash-native-audio-latest` | |
 | `GEMINI_LIVE_VOICE` | `Sulafat` | Warm female voice |
 | `GEMINI_AFFECTIVE_DIALOG` | `false` | Off = lower latency |
+| `GEMINI_LIVE_TRANSCRIPTION` | unset | `true` force on, `false` force off. Default: on when Supervisor is connected |
 | `GEMINI_EMBED_MODEL` | `gemini-embedding-001` | RAG vectors |
 | `LIVE_PROXY_PORT` | `3001` | |
 | `NEXT_PUBLIC_LIVE_PROXY_URL` | `ws://localhost:3001` | Browser → proxy |

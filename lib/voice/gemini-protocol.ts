@@ -1,5 +1,7 @@
 /** Browser-safe Gemini Live protocol helpers (no Node Buffer). */
 
+import { NUSRAT_GREETING } from "@/lib/kb/troubleshooting";
+
 export function buildAudioClientMessage(base64Pcm: string) {
   return {
     realtimeInput: {
@@ -32,7 +34,7 @@ export function buildToolResponseMessage(
 /** Ask Nusrat to speak the greeting after setup completes. */
 export function buildGreetingNudge() {
   return buildSystemNudge(
-    "Softphone just connected. Pick up like a real Amber IT care agent: warm greeting only, one short breath, then wait for the caller. Sound human, not scripted.",
+    `Softphone just connected. Speak this greeting only, one short breath, then wait for the caller. Do not add extra lines.\n${NUSRAT_GREETING}`,
   );
 }
 

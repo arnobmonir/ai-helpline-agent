@@ -2,9 +2,10 @@ import { NextResponse } from "next/server";
 import {
   AGENT_TOOLS,
   GEMINI_LIVE_MODEL,
-  NUSRAT_SYSTEM_INSTRUCTION,
   NUSRAT_VOICE,
+  buildNusratInstruction,
 } from "@/lib/agent/amber-agent";
+import { getScene } from "@/lib/mock/scene";
 
 /**
  * Mint a short-lived Gemini Live ephemeral token for browser → Gemini WS.
@@ -56,7 +57,9 @@ export async function POST() {
       model,
       voice,
       tools: AGENT_TOOLS,
-      systemInstruction: NUSRAT_SYSTEM_INSTRUCTION,
+      systemInstruction: buildNusratInstruction({
+        aniKnown: getScene().aniKnown,
+      }),
     });
   } catch (err) {
     return NextResponse.json(

@@ -16,6 +16,7 @@ import {
   buildSystemNudge,
   parseGeminiMessage,
 } from "@/lib/voice/gemini-protocol";
+import { LIVE_VAD, transcriptionEnabled } from "@/lib/voice/live-config";
 
 const DEFAULT_PROXY =
   process.env.NEXT_PUBLIC_LIVE_PROXY_URL || "ws://localhost:3001";
@@ -45,6 +46,7 @@ export interface LiveSessionState {
   tickets: unknown[];
   handoff: unknown | null;
   scene: SessionSnapshot["scene"];
+  bargeIn: boolean;
 }
 
 const initial: LiveSessionState = {
@@ -56,7 +58,8 @@ const initial: LiveSessionState = {
   customer: null,
   tickets: [],
   handoff: null,
-  scene: { gulshanOutage: true, forceUnpaidBill: true },
+  scene: { gulshanOutage: true, forceUnpaidBill: true, aniKnown: false },
+  bargeIn: false,
 };
 
 function applySnapshot(
@@ -73,6 +76,7 @@ function applySnapshot(
     tickets: snapshot.tickets as unknown[],
     handoff: snapshot.handoff,
     scene: snapshot.scene,
+    bargeIn: Boolean(snapshot.bargeIn),
   };
 }
 
@@ -94,7 +98,6 @@ export function useLiveSession(
   optionsRef.current = options;
   const directRef = useRef(false);
   const mutedRef = useRef(false);
-  const toolPendingRef = useRef(false);
   const statusRef = useRef<CallStatus>("idle");
   const roleRef = useRef(role);
   roleRef.current = role;
@@ -119,6 +122,7 @@ export function useLiveSession(
             toolCalls: [],
             customer: null,
             handoff: null,
+            bargeIn: false,
             error: undefined,
           }));
           setStatus("ringing");
@@ -174,13 +178,20 @@ export function useLiveSession(
                       ],
                     },
                     tools: tokenJson.tools || [],
+                    ...(transcriptionEnabled()
+                      ? {
+                          inputAudioTranscription: {},
+                          outputAudioTranscription: {},
+                        }
+                      : {}),
                     realtimeInputConfig: {
                       automaticActivityDetection: {
                         disabled: false,
-                        startOfSpeechSensitivity: "START_SENSITIVITY_LOW",
-                        endOfSpeechSensitivity: "END_SENSITIVITY_LOW",
-                        prefixPaddingMs: 40,
-                        silenceDurationMs: 600,
+                        startOfSpeechSensitivity:
+                          LIVE_VAD.startOfSpeechSensitivity,
+                        endOfSpeechSensitivity: LIVE_VAD.endOfSpeechSensitivity,
+                        prefixPaddingMs: LIVE_VAD.prefixPaddingMs,
+                        silenceDurationMs: LIVE_VAD.silenceDurationMs,
                       },
                     },
                   },
@@ -232,10 +243,8 @@ export function useLiveSession(
               const calls = gmsg.toolCall?.functionCalls || [];
               if (calls.length === 0) return;
 
-              toolPendingRef.current = true;
-              try {
-                const responses = [];
-                for (const call of calls) {
+              const settled = await Promise.all(
+                calls.map(async (call) => {
                   const name = call.name || "unknown";
                   const args = (call.args || {}) as Record<string, unknown>;
                   const toolRes = await fetch("/api/tools", {
@@ -248,44 +257,46 @@ export function useLiveSession(
                     data?: Record<string, unknown>;
                     events?: Array<{ type: string; payload: unknown }>;
                   };
-                  const entry: ToolCallLog = {
-                    id: nextId("tool"),
-                    name,
-                    args,
-                    result: toolJson.data || {},
-                    at: new Date().toISOString(),
-                  };
-                  setState((s) => ({
-                    ...s,
-                    toolCalls: [...s.toolCalls, entry].slice(-100),
-                  }));
-                  for (const evn of toolJson.events || []) {
-                    if (evn.type === "customer") {
-                      setState((s) => ({ ...s, customer: evn.payload }));
-                    } else if (evn.type === "ticket") {
-                      setState((s) => ({
-                        ...s,
-                        tickets: [evn.payload, ...s.tickets],
-                      }));
-                    } else if (evn.type === "handoff") {
-                      setStatus("parked");
-                      setState((s) => ({ ...s, handoff: evn.payload }));
-                    }
+                  return { call, name, args, toolJson };
+                }),
+              );
+
+              const responses = [];
+              for (const { call, name, args, toolJson } of settled) {
+                const entry: ToolCallLog = {
+                  id: nextId("tool"),
+                  name,
+                  args,
+                  result: toolJson.data || {},
+                  at: new Date().toISOString(),
+                };
+                setState((s) => ({
+                  ...s,
+                  toolCalls: [...s.toolCalls, entry].slice(-100),
+                }));
+                for (const evn of toolJson.events || []) {
+                  if (evn.type === "customer") {
+                    setState((s) => ({ ...s, customer: evn.payload }));
+                  } else if (evn.type === "ticket") {
+                    setState((s) => ({
+                      ...s,
+                      tickets: [evn.payload, ...s.tickets],
+                    }));
+                  } else if (evn.type === "handoff") {
+                    setStatus("parked");
+                    setState((s) => ({ ...s, handoff: evn.payload }));
                   }
-                  responses.push({
-                    id: call.id,
-                    name,
-                    response: { ...(toolJson.data || {}), ok: toolJson.ok },
-                  });
                 }
-                if (gws.readyState === WebSocket.OPEN) {
-                  gws.send(
-                    JSON.stringify(buildToolResponseMessage(responses)),
-                  );
-                }
-              } finally {
-                toolPendingRef.current = false;
+                responses.push({
+                  id: call.id,
+                  name,
+                  response: { ...(toolJson.data || {}), ok: toolJson.ok },
+                });
               }
+              if (gws.readyState === WebSocket.OPEN) {
+                gws.send(JSON.stringify(buildToolResponseMessage(responses)));
+              }
+              return;
             };
 
             gws.onerror = () => {
@@ -320,8 +331,7 @@ export function useLiveSession(
           if (
             mutedRef.current ||
             statusRef.current !== "connected" ||
-            !geminiRef.current ||
-            toolPendingRef.current
+            !geminiRef.current
           ) {
             return;
           }
@@ -333,6 +343,7 @@ export function useLiveSession(
           break;
         }
         case "barge_in": {
+          setState((s) => ({ ...s, bargeIn: true }));
           optionsRef.current?.onInterrupted?.();
           break;
         }
@@ -363,6 +374,47 @@ export function useLiveSession(
           geminiRef.current = null;
           setStatus("ended");
           setTimeout(() => setStatus("idle"), 400);
+          break;
+        }
+        case "set_scene": {
+          void fetch("/api/session", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              gulshanOutage: msg.gulshanOutage,
+              forceUnpaidBill: msg.forceUnpaidBill,
+              aniKnown: msg.aniKnown,
+            }),
+          });
+          setState((s) => ({
+            ...s,
+            scene: {
+              gulshanOutage: msg.gulshanOutage ?? s.scene.gulshanOutage,
+              forceUnpaidBill: msg.forceUnpaidBill ?? s.scene.forceUnpaidBill,
+              aniKnown: msg.aniKnown ?? s.scene.aniKnown,
+            },
+          }));
+          break;
+        }
+        case "reset_demo": {
+          void fetch("/api/session", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ reset: true }),
+          });
+          setState((s) => ({
+            ...s,
+            toolCalls: [],
+            customer: null,
+            tickets: [],
+            handoff: null,
+            bargeIn: false,
+            scene: {
+              gulshanOutage: true,
+              forceUnpaidBill: true,
+              aniKnown: false,
+            },
+          }));
           break;
         }
         default:
@@ -488,6 +540,9 @@ export function useLiveSession(
             break;
           case "scene":
             setState((s) => ({ ...s, scene: msg.scene }));
+            break;
+          case "barge_in":
+            setState((s) => ({ ...s, bargeIn: true }));
             break;
           case "audio":
             optionsRef.current?.onAudio?.(msg.data);

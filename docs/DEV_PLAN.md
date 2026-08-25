@@ -24,7 +24,7 @@ Use this day to make the app and data real.
 - Amber-red home, Call / Ops entry points (pages can be placeholders)
 - `.env.local.example` with `GEMINI_API_KEY`
 - 6–8 customers (CID, area, package, bill, ONU)
-- Packages MINOR+ … POSITIVE+, troubleshooting scripts
+- Packages 20 Mbps ৳500 … 250 Mbps ৳2500, troubleshooting scripts
 - In-memory tickets and outages
 - Plain TypeScript tool functions so Gemini can call them tomorrow
 

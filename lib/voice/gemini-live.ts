@@ -12,6 +12,7 @@ import {
   parseGeminiMessage,
   type GeminiServerMessage,
 } from "@/lib/voice/gemini-protocol";
+import { LIVE_VAD, transcriptionEnabled } from "@/lib/voice/live-config";
 
 export {
   buildAudioClientMessage,
@@ -43,10 +44,13 @@ export function buildGeminiLiveUrl(apiKey: string): string {
 export function buildSetupMessage(options?: {
   model?: string;
   voice?: string;
+  transcription?: boolean;
+  systemInstruction?: string;
 }) {
   const model = options?.model || GEMINI_LIVE_MODEL;
   const voice = options?.voice || process.env.GEMINI_LIVE_VOICE || NUSRAT_VOICE;
   const affective = isAffectiveDialogEnabled();
+  const transcribe = transcriptionEnabled(options?.transcription);
 
   return {
     setup: {
@@ -67,17 +71,26 @@ export function buildSetupMessage(options?: {
         ...(affective ? { enableAffectiveDialog: true } : {}),
       },
       systemInstruction: {
-        parts: [{ text: NUSRAT_SYSTEM_INSTRUCTION }],
+        parts: [
+          {
+            text: options?.systemInstruction || NUSRAT_SYSTEM_INSTRUCTION,
+          },
+        ],
       },
       tools: AGENT_TOOLS,
-      // Skip input/output transcription — saves cost + latency (captions stay optional/off)
+      ...(transcribe
+        ? {
+            inputAudioTranscription: {},
+            outputAudioTranscription: {},
+          }
+        : {}),
       realtimeInputConfig: {
         automaticActivityDetection: {
           disabled: false,
-          startOfSpeechSensitivity: "START_SENSITIVITY_LOW",
-          endOfSpeechSensitivity: "END_SENSITIVITY_LOW",
-          prefixPaddingMs: 40,
-          silenceDurationMs: 600,
+          startOfSpeechSensitivity: LIVE_VAD.startOfSpeechSensitivity,
+          endOfSpeechSensitivity: LIVE_VAD.endOfSpeechSensitivity,
+          prefixPaddingMs: LIVE_VAD.prefixPaddingMs,
+          silenceDurationMs: LIVE_VAD.silenceDurationMs,
         },
       },
     },

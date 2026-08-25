@@ -1,7 +1,8 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { useLiveSession } from "@/lib/voice/use-live-session";
+import { summarizeToolCall } from "@/lib/agent/tool-summaries";
 
 type CustomerCard = {
   cid?: string;
@@ -36,6 +37,46 @@ export function OpsDashboard() {
   const customer = state.customer as CustomerCard | null;
   const handoff = state.handoff as Handoff | null;
   const tickets = state.tickets as Ticket[];
+  const transcriptEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    transcriptEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [state.transcript]);
+
+  const idle =
+    state.status === "idle" &&
+    state.transcript.length === 0 &&
+    state.toolCalls.length === 0;
+
+  const beats = [
+    {
+      id: "outage",
+      label: "Outage / ticket",
+      done: state.toolCalls.some(
+        (t) => t.name === "checkAreaOutage" || t.name === "createTicket",
+      ),
+    },
+    {
+      id: "bill",
+      label: "Bill + payment",
+      done: state.toolCalls.some((t) => t.name === "getBill"),
+    },
+    {
+      id: "upgrade",
+      label: "Upgrade 200 Mbps",
+      done: state.toolCalls.some((t) => t.name === "listPackages"),
+    },
+    {
+      id: "barge",
+      label: "Barge-in",
+      done: state.bargeIn,
+    },
+    {
+      id: "human",
+      label: "Human handoff",
+      done: Boolean(handoff?.active),
+    },
+  ];
 
   return (
     <div className="mx-auto grid w-full max-w-7xl gap-4 px-4 py-6 lg:grid-cols-12">
@@ -50,6 +91,35 @@ export function OpsDashboard() {
               GEMINI_API_KEY missing in .env.local
             </p>
           )}
+          {idle && (
+            <p className="mt-3 text-sm text-amber-muted">
+              Open the softphone in another tab and press Call.
+            </p>
+          )}
+        </Panel>
+
+        <Panel title="Pitch checklist">
+          <ol className="space-y-2">
+            {beats.map((beat, i) => (
+              <li
+                key={beat.id}
+                className="flex items-center gap-2 text-sm text-amber-ink"
+              >
+                <span
+                  className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${
+                    beat.done
+                      ? "bg-emerald-500 text-white"
+                      : "bg-amber-cream text-amber-muted"
+                  }`}
+                >
+                  {beat.done ? "✓" : i + 1}
+                </span>
+                <span className={beat.done ? "text-amber-muted line-through" : ""}>
+                  {beat.label}
+                </span>
+              </li>
+            ))}
+          </ol>
         </Panel>
 
         <Panel title="Presenter toggles">
@@ -66,6 +136,11 @@ export function OpsDashboard() {
             onChange={(forceUnpaidBill) =>
               send({ type: "set_scene", forceUnpaidBill })
             }
+          />
+          <Toggle
+            label="ANI known (skip CID ask)"
+            checked={state.scene.aniKnown}
+            onChange={(aniKnown) => send({ type: "set_scene", aniKnown })}
           />
           <button
             type="button"
@@ -107,7 +182,9 @@ export function OpsDashboard() {
           <div className="flex max-h-[32rem] flex-col gap-2 overflow-y-auto pr-1">
             {state.transcript.length === 0 && (
               <p className="text-sm text-amber-muted">
-                Transcript appears when the call is connected.
+                {idle
+                  ? "Open the softphone in another tab and press Call."
+                  : "Transcript appears when the call is connected (keep this window open)."}
               </p>
             )}
             {state.transcript.map((line) => (
@@ -131,6 +208,7 @@ export function OpsDashboard() {
                 <p className="mt-0.5 whitespace-pre-wrap">{line.text}</p>
               </div>
             ))}
+            <div ref={transcriptEndRef} />
           </div>
         </Panel>
       </section>
@@ -162,12 +240,9 @@ export function OpsDashboard() {
                 className="rounded-lg border border-amber-border bg-amber-cream/50 p-2 text-xs"
               >
                 <p className="font-semibold text-amber-red">{t.name}</p>
-                <pre className="mt-1 overflow-x-auto text-[10px] text-amber-muted">
-                  {JSON.stringify(t.args, null, 0)}
-                </pre>
-                <pre className="mt-1 overflow-x-auto text-[10px] text-amber-ink">
-                  {JSON.stringify(t.result, null, 0).slice(0, 280)}
-                </pre>
+                <p className="mt-1 text-sm text-amber-ink">
+                  {summarizeToolCall(t.name, t.args, t.result)}
+                </p>
               </div>
             ))}
           </div>

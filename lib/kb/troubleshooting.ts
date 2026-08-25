@@ -35,6 +35,10 @@ export const SPEECH_STYLE = {
   ],
 };
 
+/** Locked opening line — keep identical in prompt, greeting nudge, and pitch docs. */
+export const NUSRAT_GREETING =
+  "আসসালামু আলাইকুম। Amber IT Customer Care থেকে নুসরাত বলছি। আপনাকে কীভাবে হেল্প করতে পারি?";
+
 export const PAYMENT_SCRIPTS = {
   bkash: [
     "bKash অ্যাপ বা *247# ডায়াল করুন।",

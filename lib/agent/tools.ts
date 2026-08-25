@@ -18,7 +18,7 @@ import {
   withVat,
   type PackageId,
 } from "@/lib/kb/packages";
-import { PAYMENT_SCRIPTS, TROUBLESHOOTING } from "@/lib/kb/troubleshooting";
+import { PAYMENT_SCRIPTS } from "@/lib/kb/troubleshooting";
 import { searchKnowledge } from "@/lib/rag/store";
 
 export interface ToolResult {
@@ -76,6 +76,13 @@ function resolveCustomer(ref: string): Customer | undefined {
   return byId(ref) || findCustomer(ref);
 }
 
+function onuSpeak(status: Customer["onuStatus"]): string {
+  if (status === "los_red") return "ONU-তে লাল লাইট";
+  if (status === "power_off") return "ONU পাওয়ার অফ";
+  if (status === "online") return "ONU অনলাইন";
+  return "ONU স্ট্যাটাস অজানা";
+}
+
 export function lookupCustomer(cidOrPhone: string): ToolResult {
   const found = findCustomer(cidOrPhone);
   if (!found) {
@@ -83,6 +90,8 @@ export function lookupCustomer(cidOrPhone: string): ToolResult {
       ok: false,
       data: {
         found: false,
+        speakAs:
+          "এই CID বা মোবাইল নাম্বারে কাস্টমার পাইনি স্যার। একবার আবার বলবেন?",
         message:
           "No customer found for that CID or mobile. Ask them to reconfirm.",
       },
@@ -92,18 +101,26 @@ export function lookupCustomer(cidOrPhone: string): ToolResult {
   const card = customerCard(customer);
   return {
     ok: true,
-    data: { found: true, customer: card },
+    data: {
+      found: true,
+      customer: card,
+      speakAs: `দেখলাম স্যার, ${customer.name}, CID ${customer.cid}, ${customer.area}, ${onuSpeak(customer.onuStatus)}।`,
+    },
     events: [{ type: "customer", payload: card }],
   };
 }
 
-export function getBill(customerIdOrCid: string): ToolResult {
+export function getBill(
+  customerIdOrCid: string,
+  method?: string,
+): ToolResult {
   const resolved = resolveCustomer(customerIdOrCid);
   if (!resolved) {
     return {
       ok: false,
       data: {
         found: false,
+        speakAs: "আগে CID বা রেজিস্টার্ড মোবাইলটা একটু নিশ্চিত করবেন স্যার?",
         message: "Customer not found. Lookup CID or phone first.",
       },
     };
@@ -111,40 +128,44 @@ export function getBill(customerIdOrCid: string): ToolResult {
 
   const customer = applySceneToCustomer(resolved);
   const plan = getPackage(customer.packageId);
+  const speakAs =
+    customer.bill.status === "paid"
+      ? `বিল ক্লিয়ার স্যার। পরের due ${customer.bill.dueDate}।`
+      : `দেখলাম স্যার, বকেয়া ৳${customer.bill.dueAmountBdt}, due ${customer.bill.dueDate}। bKash, Nagad, Rocket Pay Bill বা myswift দিয়ে Customer ID দিয়ে পেমেন্ট করতে পারেন।`;
+
+  const data: Record<string, unknown> = {
+    cid: customer.cid,
+    name: customer.name,
+    dueAmountBdt: customer.bill.dueAmountBdt,
+    dueDate: customer.bill.dueDate,
+    status: customer.bill.status,
+    package: formatPackageLine(plan),
+    speakAs,
+    payVia: ["bKash", "Nagad", "Rocket", "myswift"],
+  };
+
+  const m = (method || "").toLowerCase();
+  if (m === "bkash") data.steps = PAYMENT_SCRIPTS.bkash;
+  else if (m === "nagad") data.steps = PAYMENT_SCRIPTS.nagad;
+  else if (m === "rocket") data.steps = PAYMENT_SCRIPTS.rocket;
 
   return {
     ok: true,
-    data: {
-      cid: customer.cid,
-      name: customer.name,
-      dueAmountBdt: customer.bill.dueAmountBdt,
-      dueDate: customer.bill.dueDate,
-      status: customer.bill.status,
-      package: formatPackageLine(plan),
-      payVia: [
-        "bKash Pay Bill → Amber IT",
-        "Nagad Pay Bill → Amber IT",
-        "Rocket Pay Bill → Amber IT",
-        "myswift app / myswift.amberit.com.bd",
-      ],
-      bkashSteps: PAYMENT_SCRIPTS.bkash,
-      nagadSteps: PAYMENT_SCRIPTS.nagad,
-      rocketSteps: PAYMENT_SCRIPTS.rocket,
-      paymentNote: PAYMENT_SCRIPTS.note,
-      script:
-        customer.bill.status === "paid"
-          ? `Bill clear. Next due around ${customer.bill.dueDate}.`
-          : `Due ৳${customer.bill.dueAmountBdt}, due ${customer.bill.dueDate}. Guide bKash/Nagad/Rocket Pay Bill (Amber IT) with Customer ID, or myswift.`,
-    },
+    data,
     events: [{ type: "customer", payload: customerCard(customer) }],
   };
 }
 
 export function checkAreaOutageTool(area: string): ToolResult {
   const info = checkAreaOutage(area);
+  const etaBn =
+    info.eta && /45/.test(info.eta) ? "প্রায় ৪৫ মিনিট" : info.eta;
+  const speakAs = info.active
+    ? `জি স্যার, ${info.area}-এ ${info.type || "outage"} আছে${etaBn ? `, ETA ${etaBn}` : ""}। আমরা কাজ করছি।`
+    : `${info.area}-এ এখন কোনো outage নেই স্যার।`;
   return {
     ok: true,
-    data: { ...info },
+    data: { ...info, speakAs },
   };
 }
 
@@ -171,14 +192,15 @@ export function createTicketTool(args: {
     area: args.area || customer?.area,
   });
 
+  const spokenId = ticket.id.replace("TKT-", "");
   return {
     ok: true,
     data: {
       ticketId: ticket.id,
-      spokenId: ticket.id.replace("TKT-", "ticket "),
+      spokenId,
       summary: ticket.summary,
+      speakAs: `টিকেট খুলেছি স্যার, আইডি ${spokenId}। এই নাম্বারটা রাখুন।`,
       message: `Ticket ${ticket.id} created. Read this id back to the caller.`,
-      onuTips: TROUBLESHOOTING.noInternet.steps.slice(0, 2),
     },
     events: [{ type: "ticket", payload: ticket }],
   };
@@ -186,28 +208,28 @@ export function createTicketTool(args: {
 
 export function listPackagesTool(desiredMbps?: number): ToolResult {
   let recommendation: string | undefined;
+  let speakAs =
+    "হোম প্যাকেজ ২০ থেকে ২৫০ Mbps। দামের সাথে ৫% VAT। ৩০ Mbps+ এ ফ্রি ইনস্টলেশন।";
   if (desiredMbps && desiredMbps > 0) {
     const match =
       PACKAGES.find((p) => p.speedMbps >= desiredMbps) ||
       PACKAGES[PACKAGES.length - 1];
     const total = withVat(match.monthlyBdt);
     recommendation = `${match.name} ${match.speedMbps} Mbps at ৳${match.monthlyBdt}/mo (+5% VAT = ৳${total}).`;
+    speakAs = `স্যার, ${match.speedMbps} Mbps প্যাকেজ ৳${match.monthlyBdt} প্রতি মাস, VAT সহ ৳${total}।`;
   }
   return {
     ok: true,
     data: {
       packages: PACKAGES.map((p) => ({
-        id: p.id,
         name: p.name,
         speedMbps: p.speedMbps,
         monthlyBdt: p.monthlyBdt,
         withVat: withVat(p.monthlyBdt),
         otcBdt: p.otcBdt,
-        notes: p.notes,
-        line: formatPackageLine(p),
       })),
-      lines: PACKAGES.map(formatPackageLine),
       recommendation,
+      speakAs,
       note: "Prices +5% VAT. 30 Mbps+ Free Installation (current). 20 Mbps OTC ৳1000 unless own GPON/XPON ONU. Real IP only on 250 Mbps.",
     },
   };
@@ -227,6 +249,8 @@ export function escalateToHumanTool(args: {
     ok: true,
     data: {
       parked: true,
+      speakAs:
+        "ঠিক আছে স্যার, আপনাকে একজন সহকর্মীর কাছে ট্রান্সফার করছি। একটু অপেক্ষা করবেন।",
       message:
         "Call parked for human agent. Tell the caller someone will take over shortly. Do not continue troubleshooting.",
       handoff,
@@ -251,6 +275,8 @@ export async function searchKnowledgeTool(args: {
       ok: true,
       data: {
         hits: [],
+        speakAs:
+          "এটা এখন হাতে নিশ্চিত করতে পারছি না স্যার — একজন সিনিয়রকে জিজ্ঞাসা করছি।",
         note: "No KB hit. Say you will check with a senior / escalate if needed. Do not invent Amber IT policy.",
       },
     };
@@ -264,6 +290,7 @@ export async function searchKnowledgeTool(args: {
         text: h.text,
         score: h.score,
       })),
+      speakAs: hits[0]?.text.slice(0, 280),
       speakFrom: "Use only these retrieved facts. Paraphrase briefly for the caller.",
     },
   };
@@ -281,6 +308,7 @@ export async function executeTool(
     case "getBill":
       return getBill(
         String(args.customerId ?? args.cid ?? args.cidOrPhone ?? ""),
+        args.method ? String(args.method) : undefined,
       );
     case "checkAreaOutage":
       return checkAreaOutageTool(String(args.area ?? ""));
