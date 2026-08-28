@@ -3,6 +3,8 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { useLiveSession } from "@/lib/voice/use-live-session";
 import { summarizeToolCall } from "@/lib/agent/tool-summaries";
+import { useVoiceSettings } from "@/lib/voice/use-voice-settings";
+import { agentPersonaForVoice } from "@/lib/voice/voice-settings";
 
 type CustomerCard = {
   cid?: string;
@@ -33,6 +35,8 @@ type Handoff = {
 
 export function OpsDashboard() {
   const { state, send } = useLiveSession("ops");
+  const { settings } = useVoiceSettings();
+  const agent = agentPersonaForVoice(settings.voice);
 
   const customer = state.customer as CustomerCard | null;
   const handoff = state.handoff as Handoff | null;
@@ -200,7 +204,7 @@ export function OpsDashboard() {
               >
                 <p className="text-[10px] font-semibold uppercase tracking-wide text-amber-muted">
                   {line.role === "nusrat"
-                    ? "Nusrat"
+                    ? agent.name
                     : line.role === "user"
                       ? "Caller"
                       : "System"}

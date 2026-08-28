@@ -30,6 +30,12 @@ export interface SessionScene {
   aniKnown: boolean;
 }
 
+export interface CallVoiceSettings {
+  voice?: string;
+  affectiveDialog?: boolean;
+  audioQuality?: "fast" | "natural";
+}
+
 export interface SessionSnapshot {
   status: CallStatus;
   error?: string;
@@ -45,7 +51,7 @@ export interface SessionSnapshot {
 /** Messages browser clients send to the live proxy */
 export type BrowserToProxy =
   | { type: "hello"; role: ClientRole }
-  | { type: "start_call" }
+  | { type: "start_call"; settings?: CallVoiceSettings }
   | { type: "audio"; data: string }
   | { type: "barge_in" }
   | { type: "mute"; muted: boolean }

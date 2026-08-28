@@ -12,6 +12,8 @@ import {
   MicOffIcon,
   PhoneGlyph,
 } from "@/components/softphone/icons";
+import { useVoiceSettings } from "@/lib/voice/use-voice-settings";
+import { agentPersonaForVoice } from "@/lib/voice/voice-settings";
 
 type SoftphonePhase = "idle" | "ringing" | "connected" | "ended" | "error";
 
@@ -41,6 +43,10 @@ const USER_SILENCE_MS = 16000;
 const MAX_SILENCE_REPEATS = 1;
 /** After goodbye nudge, hang up. */
 const SILENCE_HANGUP_DELAY_MS = 4500;
+/** Dual-tone ringback (440+480 Hz) — one full ring before Nusrat answers. */
+const RING_ON_SEC = 2;
+const RING_GAP_SEC = 0.4;
+const RING_GAIN = 0.12;
 
 export function Softphone() {
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -77,6 +83,7 @@ export function Softphone() {
   const [agentTalking, setAgentTalking] = useState(false);
   const [userTalking, setUserTalking] = useState(false);
   const connectedAtRef = useRef<number | null>(null);
+  const stopRingRef = useRef<(() => void) | null>(null);
 
   const isAgentPlaying = useCallback(() => {
     const ctx = audioCtxRef.current;
@@ -168,6 +175,8 @@ export function Softphone() {
       ignoreAgentUntilRef.current = 0;
     },
   });
+  const { settings } = useVoiceSettings();
+  const agent = agentPersonaForVoice(settings.voice);
 
   const mutedRef = useRef(false);
   mutedRef.current = muted;
@@ -296,6 +305,11 @@ export function Softphone() {
     }
   }, [ensureAudio]);
 
+  const stopRingTone = useCallback(() => {
+    stopRingRef.current?.();
+    stopRingRef.current = null;
+  }, []);
+
   const stopMic = useCallback(() => {
     workletNodeRef.current?.port.close();
     workletNodeRef.current?.disconnect();
@@ -379,6 +393,7 @@ export function Softphone() {
 
   useEffect(() => {
     if (state.status === "connected" || state.status === "parked") {
+      stopRingTone();
       void startMic();
       if (!connectedAtRef.current) connectedAtRef.current = Date.now();
     }
@@ -387,6 +402,7 @@ export function Softphone() {
       state.status === "idle" ||
       state.status === "error"
     ) {
+      stopRingTone();
       stopMic();
       clearPlayback();
       resetSilenceWatch();
@@ -395,7 +411,7 @@ export function Softphone() {
       setAgentTalking(false);
       setUserTalking(false);
     }
-  }, [state.status, startMic, stopMic, clearPlayback, resetSilenceWatch]);
+  }, [state.status, startMic, stopMic, stopRingTone, clearPlayback, resetSilenceWatch]);
 
   useEffect(() => {
     if (!(state.status === "connected" || state.status === "parked")) return;
@@ -457,12 +473,13 @@ export function Softphone() {
 
   useEffect(() => {
     return () => {
+      stopRingTone();
       stopMic();
       clearPlayback();
       clearSilenceTimers();
       void audioCtxRef.current?.close();
     };
-  }, [stopMic, clearPlayback, clearSilenceTimers]);
+  }, [stopMic, stopRingTone, clearPlayback, clearSilenceTimers]);
 
   const phase: SoftphonePhase =
     state.status === "error"
@@ -478,12 +495,14 @@ export function Softphone() {
   const onCall = async () => {
     const ctx = await ensureAudio();
     clearPlayback();
-    playRingTone(ctx);
-    send({ type: "start_call" });
+    stopRingTone();
+    stopRingRef.current = startRingTone(ctx);
+    send({ type: "start_call", settings });
   };
 
   const onHangup = () => {
     send({ type: "hangup" });
+    stopRingTone();
     stopMic();
     clearPlayback();
   };
@@ -527,7 +546,7 @@ export function Softphone() {
 
   const talkHint =
     talkMode === "agent"
-      ? "Nusrat speaking…"
+      ? `${agent.name} speaking…`
       : talkMode === "user"
         ? "You're speaking…"
         : talkMode === "listen"
@@ -546,8 +565,9 @@ export function Softphone() {
           09611-123123
         </h1>
         <p className="mt-2 text-center text-sm text-rose-100/70">
-          {phase === "idle" && "Ready to call"}
-          {phase === "ringing" && "Ringing… Nusrat will pick up"}
+          {phase === "idle" &&
+            `Ready to call · ${settings.voice} · ${agent.name}`}
+          {phase === "ringing" && `Ringing… ${agent.name} will pick up`}
           {phase === "connected" &&
             (state.status === "parked"
               ? "Parked — waiting for human"
@@ -680,7 +700,7 @@ export function Softphone() {
                 }
               >
                 <span className="mr-1.5 text-[10px] font-semibold uppercase tracking-wide text-rose-200/60">
-                  {line.role === "nusrat" ? "Nusrat" : "You"}
+                  {line.role === "nusrat" ? agent.name : "You"}
                 </span>
                 {line.text}
               </p>
@@ -718,18 +738,55 @@ export function Softphone() {
   );
 }
 
-function playRingTone(ctx: AudioContext) {
-  const now = ctx.currentTime;
-  const gain = ctx.createGain();
-  gain.gain.setValueAtTime(0.08, now);
-  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
-  gain.connect(ctx.destination);
-  for (const freq of [440, 480]) {
-    const osc = ctx.createOscillator();
-    osc.type = "sine";
-    osc.frequency.value = freq;
-    osc.connect(gain);
-    osc.start(now);
-    osc.stop(now + 0.38);
-  }
+/** PSTN-style ringback: 440+480 Hz, 2s on, then repeat until pickup. */
+function startRingTone(ctx: AudioContext): () => void {
+  let stopped = false;
+  const nodes: Array<OscillatorNode | GainNode> = [];
+  let timer: ReturnType<typeof setTimeout> | null = null;
+
+  const burst = (when: number) => {
+    const gain = ctx.createGain();
+    gain.connect(ctx.destination);
+    gain.gain.setValueAtTime(0.0001, when);
+    gain.gain.exponentialRampToValueAtTime(RING_GAIN, when + 0.025);
+    gain.gain.setValueAtTime(RING_GAIN, when + RING_ON_SEC - 0.08);
+    gain.gain.exponentialRampToValueAtTime(0.0001, when + RING_ON_SEC);
+    nodes.push(gain);
+    for (const freq of [440, 480]) {
+      const osc = ctx.createOscillator();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      osc.connect(gain);
+      osc.start(when);
+      osc.stop(when + RING_ON_SEC + 0.02);
+      nodes.push(osc);
+    }
+  };
+
+  const schedule = () => {
+    if (stopped) return;
+    burst(ctx.currentTime + 0.01);
+    timer = setTimeout(schedule, (RING_ON_SEC + RING_GAP_SEC) * 1000);
+  };
+
+  schedule();
+
+  return () => {
+    stopped = true;
+    if (timer) clearTimeout(timer);
+    for (const node of nodes) {
+      try {
+        node.disconnect();
+      } catch {
+        /* already disconnected */
+      }
+      if (!("gain" in node)) {
+        try {
+          node.stop();
+        } catch {
+          /* already stopped or not yet started */
+        }
+      }
+    }
+  };
 }

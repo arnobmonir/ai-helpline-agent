@@ -35,9 +35,12 @@ export const SPEECH_STYLE = {
   ],
 };
 
-/** Locked opening line — keep identical in prompt, greeting nudge, and pitch docs. */
-export const NUSRAT_GREETING =
-  "আসসালামু আলাইকুম। Amber IT Customer Care থেকে নুসরাত বলছি। আপনাকে কীভাবে হেল্প করতে পারি?";
+/** Locked opening line — name slot matches the selected voice gender. */
+export function buildCareGreeting(nameBn: string) {
+  return `আসসালামু আলাইকুম। Amber IT Customer Care থেকে ${nameBn} বলছি। আপনাকে কীভাবে হেল্প করতে পারি?`;
+}
+
+export const NUSRAT_GREETING = buildCareGreeting("নুসরাত");
 
 export const PAYMENT_SCRIPTS = {
   bkash: [

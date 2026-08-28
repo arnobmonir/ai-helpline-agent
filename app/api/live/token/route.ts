@@ -11,7 +11,7 @@ import { getScene } from "@/lib/mock/scene";
  * Mint a short-lived Gemini Live ephemeral token for browser → Gemini WS.
  * API key stays on the server (works on Vercel without a Node WS proxy).
  */
-export async function POST() {
+export async function POST(request: Request) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || apiKey === "your_key_here") {
     return NextResponse.json(
@@ -21,7 +21,20 @@ export async function POST() {
   }
 
   const model = process.env.GEMINI_LIVE_MODEL || GEMINI_LIVE_MODEL;
-  const voice = process.env.GEMINI_LIVE_VOICE || NUSRAT_VOICE;
+  let body: unknown = {};
+  try {
+    body = await request.json();
+  } catch {
+    body = {};
+  }
+  const voice =
+    (body &&
+      typeof body === "object" &&
+      "voice" in body &&
+      typeof (body as { voice?: unknown }).voice === "string" &&
+      (body as { voice: string }).voice) ||
+    process.env.GEMINI_LIVE_VOICE ||
+    NUSRAT_VOICE;
   const expireTime = new Date(Date.now() + 30 * 60 * 1000).toISOString();
   const newSessionExpireTime = new Date(
     Date.now() + 2 * 60 * 1000,
@@ -59,6 +72,7 @@ export async function POST() {
       tools: AGENT_TOOLS,
       systemInstruction: buildNusratInstruction({
         aniKnown: getScene().aniKnown,
+        voice,
       }),
     });
   } catch (err) {

@@ -16,7 +16,9 @@ import {
   buildSystemNudge,
   parseGeminiMessage,
 } from "@/lib/voice/gemini-protocol";
-import { LIVE_VAD, transcriptionEnabled } from "@/lib/voice/live-config";
+import { CALL_RING_MS, transcriptionEnabled } from "@/lib/voice/live-config";
+import { buildLiveSetupMessage } from "@/lib/voice/live-setup";
+import { parseVoiceSettings } from "@/lib/voice/voice-settings";
 
 const DEFAULT_PROXY =
   process.env.NEXT_PUBLIC_LIVE_PROXY_URL || "ws://localhost:3001";
@@ -33,7 +35,7 @@ function useDirectLive(): boolean {
 const LIVE_WS =
   "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained";
 
-const RING_MS = 400;
+const RING_MS = CALL_RING_MS;
 
 export interface LiveSessionState {
   connected: boolean;
@@ -127,7 +129,12 @@ export function useLiveSession(
           }));
           setStatus("ringing");
           try {
-            const tokenRes = await fetch("/api/live/token", { method: "POST" });
+            const settings = parseVoiceSettings(msg.settings);
+            const tokenRes = await fetch("/api/live/token", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(settings),
+            });
             const tokenJson = (await tokenRes.json()) as {
               token?: string;
               error?: string;
@@ -153,49 +160,21 @@ export function useLiveSession(
             gws.onopen = () => {
               const model =
                 tokenJson.model || "gemini-2.5-flash-native-audio-latest";
-              const voice = tokenJson.voice || "Sulafat";
               gws.send(
-                JSON.stringify({
-                  setup: {
-                    model: `models/${model}`,
-                    generationConfig: {
-                      responseModalities: ["AUDIO"],
-                      mediaResolution: "MEDIA_RESOLUTION_LOW",
-                      thinkingConfig: { thinkingBudget: 0 },
-                      speechConfig: {
-                        voiceConfig: {
-                          prebuiltVoiceConfig: { voiceName: voice },
-                        },
-                      },
-                    },
-                    systemInstruction: {
-                      parts: [
-                        {
-                          text:
-                            tokenJson.systemInstruction ||
-                            "You are Nusrat, Amber IT Customer Care.",
-                        },
-                      ],
-                    },
+                JSON.stringify(
+                  buildLiveSetupMessage({
+                    model,
+                    systemInstruction:
+                      tokenJson.systemInstruction ||
+                      "You are Amber IT Customer Care.",
                     tools: tokenJson.tools || [],
-                    ...(transcriptionEnabled()
-                      ? {
-                          inputAudioTranscription: {},
-                          outputAudioTranscription: {},
-                        }
-                      : {}),
-                    realtimeInputConfig: {
-                      automaticActivityDetection: {
-                        disabled: false,
-                        startOfSpeechSensitivity:
-                          LIVE_VAD.startOfSpeechSensitivity,
-                        endOfSpeechSensitivity: LIVE_VAD.endOfSpeechSensitivity,
-                        prefixPaddingMs: LIVE_VAD.prefixPaddingMs,
-                        silenceDurationMs: LIVE_VAD.silenceDurationMs,
-                      },
+                    settings: {
+                      ...settings,
+                      voice: settings.voice || tokenJson.voice || "Sulafat",
                     },
-                  },
-                }),
+                    transcription: transcriptionEnabled(),
+                  }),
+                ),
               );
             };
 
@@ -224,7 +203,7 @@ export function useLiveSession(
                   )
                     return;
                   setStatus("connected");
-                  gws.send(JSON.stringify(buildGreetingNudge()));
+                  gws.send(JSON.stringify(buildGreetingNudge(settings.voice)));
                 }, delay);
                 return;
               }

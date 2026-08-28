@@ -1,5 +1,8 @@
 /** Shared Gemini Live realtime settings (browser + proxy). */
 
+/** Minimum caller ringback before Nusrat picks up. */
+export const CALL_RING_MS = 2000;
+
 export const LIVE_VAD = {
   startOfSpeechSensitivity: "START_SENSITIVITY_LOW" as const,
   endOfSpeechSensitivity: "END_SENSITIVITY_LOW" as const,

@@ -12,7 +12,13 @@ import {
   parseGeminiMessage,
   type GeminiServerMessage,
 } from "@/lib/voice/gemini-protocol";
-import { LIVE_VAD, transcriptionEnabled } from "@/lib/voice/live-config";
+import { transcriptionEnabled } from "@/lib/voice/live-config";
+import { buildLiveSetupMessage } from "@/lib/voice/live-setup";
+import {
+  DEFAULT_VOICE_SETTINGS,
+  parseVoiceSettings,
+  type VoiceSettings,
+} from "@/lib/voice/voice-settings";
 
 export {
   buildAudioClientMessage,
@@ -33,12 +39,24 @@ export function isAffectiveDialogEnabled(): boolean {
   return (process.env.GEMINI_AFFECTIVE_DIALOG || "false").toLowerCase() === "true";
 }
 
-export function buildGeminiLiveUrl(apiKey: string): string {
-  const affective = isAffectiveDialogEnabled();
+export function buildGeminiLiveUrl(
+  apiKey: string,
+  affectiveDialog?: boolean,
+): string {
+  const affective =
+    affectiveDialog ?? isAffectiveDialogEnabled();
   const base =
     process.env.GEMINI_LIVE_WS_URL ||
     (affective ? DEFAULT_WS_ALPHA : DEFAULT_WS_BETA);
   return `${base}?key=${encodeURIComponent(apiKey)}`;
+}
+
+export function envDefaultVoiceSettings(): VoiceSettings {
+  return parseVoiceSettings({
+    ...DEFAULT_VOICE_SETTINGS,
+    voice: process.env.GEMINI_LIVE_VOICE || NUSRAT_VOICE,
+    affectiveDialog: isAffectiveDialogEnabled(),
+  });
 }
 
 export function buildSetupMessage(options?: {
@@ -46,55 +64,22 @@ export function buildSetupMessage(options?: {
   voice?: string;
   transcription?: boolean;
   systemInstruction?: string;
+  settings?: Partial<VoiceSettings>;
 }) {
-  const model = options?.model || GEMINI_LIVE_MODEL;
-  const voice = options?.voice || process.env.GEMINI_LIVE_VOICE || NUSRAT_VOICE;
-  const affective = isAffectiveDialogEnabled();
-  const transcribe = transcriptionEnabled(options?.transcription);
+  const fallback = envDefaultVoiceSettings();
+  const settings = parseVoiceSettings({
+    ...fallback,
+    ...options?.settings,
+    ...(options?.voice ? { voice: options.voice } : {}),
+  });
 
-  return {
-    setup: {
-      model: `models/${model}`,
-      generationConfig: {
-        responseModalities: ["AUDIO"],
-        // Lower input media fidelity → less token work / snappier turns
-        mediaResolution: "MEDIA_RESOLUTION_LOW",
-        // Gemini 2.5 native-audio: disable thinking for lowest latency
-        thinkingConfig: { thinkingBudget: 0 },
-        speechConfig: {
-          voiceConfig: {
-            prebuiltVoiceConfig: {
-              voiceName: voice,
-            },
-          },
-        },
-        ...(affective ? { enableAffectiveDialog: true } : {}),
-      },
-      systemInstruction: {
-        parts: [
-          {
-            text: options?.systemInstruction || NUSRAT_SYSTEM_INSTRUCTION,
-          },
-        ],
-      },
-      tools: AGENT_TOOLS,
-      ...(transcribe
-        ? {
-            inputAudioTranscription: {},
-            outputAudioTranscription: {},
-          }
-        : {}),
-      realtimeInputConfig: {
-        automaticActivityDetection: {
-          disabled: false,
-          startOfSpeechSensitivity: LIVE_VAD.startOfSpeechSensitivity,
-          endOfSpeechSensitivity: LIVE_VAD.endOfSpeechSensitivity,
-          prefixPaddingMs: LIVE_VAD.prefixPaddingMs,
-          silenceDurationMs: LIVE_VAD.silenceDurationMs,
-        },
-      },
-    },
-  };
+  return buildLiveSetupMessage({
+    model: options?.model || GEMINI_LIVE_MODEL,
+    systemInstruction: options?.systemInstruction || NUSRAT_SYSTEM_INSTRUCTION,
+    tools: AGENT_TOOLS,
+    settings,
+    transcription: transcriptionEnabled(options?.transcription),
+  });
 }
 
 export function pcmToBase64(pcm: Buffer | Uint8Array): string {

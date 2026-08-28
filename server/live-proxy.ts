@@ -11,7 +11,8 @@ import { getScene, resetScene, setScene } from "../lib/mock/scene";
 import { executeTool, lookupCustomer } from "../lib/agent/tools";
 import { buildNusratInstruction } from "../lib/agent/amber-agent";
 import { CUSTOMERS, DEMO_CUSTOMER_ID } from "../lib/mock/customers";
-import { transcriptionEnabled } from "../lib/voice/live-config";
+import { CALL_RING_MS, transcriptionEnabled } from "../lib/voice/live-config";
+import { parseVoiceSettings, type VoiceSettings } from "../lib/voice/voice-settings";
 import { initRag } from "../lib/rag/store";
 import {
   buildAudioClientMessage,
@@ -20,6 +21,7 @@ import {
   buildSetupMessage,
   buildSystemNudge,
   buildToolResponseMessage,
+  envDefaultVoiceSettings,
   parseGeminiMessage,
 } from "../lib/voice/gemini-live";
 import type {
@@ -52,6 +54,7 @@ let bargeIn = false;
 let inputPartial = "";
 let outputPartial = "";
 let seq = 0;
+let voiceSettings: VoiceSettings = envDefaultVoiceSettings();
 
 function nextId(prefix: string) {
   seq += 1;
@@ -170,9 +173,12 @@ function resetCallState(keepScene = true) {
   broadcastAll({ type: "snapshot", snapshot: snapshot() });
 }
 
-const RING_MS = Number(process.env.CALL_RING_MS || 400);
+const RING_MS = Number(process.env.CALL_RING_MS || CALL_RING_MS);
 
-async function startGeminiSession(options?: { greetAfterMs?: number }) {
+async function startGeminiSession(options?: {
+  greetAfterMs?: number;
+  settings?: VoiceSettings;
+}) {
   if (!apiKey || apiKey === "your_key_here") {
     setStatus(
       "error",
@@ -189,8 +195,9 @@ async function startGeminiSession(options?: { greetAfterMs?: number }) {
   const greetAt = Date.now() + greetAfterMs;
   const scene = getScene();
   const transcribe = transcriptionEnabled(hasOpsClient());
+  const settings = options?.settings ?? voiceSettings;
 
-  const url = buildGeminiLiveUrl(apiKey);
+  const url = buildGeminiLiveUrl(apiKey, settings.affectiveDialog);
   const ws = new WebSocket(url);
   gemini = ws;
   let closedExpected = false;
@@ -198,7 +205,11 @@ async function startGeminiSession(options?: { greetAfterMs?: number }) {
   ws.on("open", () => {
     const setup = buildSetupMessage({
       transcription: transcribe,
-      systemInstruction: buildNusratInstruction({ aniKnown: scene.aniKnown }),
+      systemInstruction: buildNusratInstruction({
+        aniKnown: scene.aniKnown,
+        voice: settings.voice,
+      }),
+      settings,
     });
     console.log(
       "[gemini] setup model=",
@@ -208,6 +219,8 @@ async function startGeminiSession(options?: { greetAfterMs?: number }) {
         .voiceName,
       "affective=",
       Boolean(setup.setup.generationConfig.enableAffectiveDialog),
+      "quality=",
+      settings.audioQuality,
     );
     ws.send(JSON.stringify(setup));
   });
@@ -237,7 +250,7 @@ async function startGeminiSession(options?: { greetAfterMs?: number }) {
       setTimeout(() => {
         if (gemini !== ws || ws.readyState !== WebSocket.OPEN) return;
         setStatus("connected");
-        ws.send(JSON.stringify(buildGreetingNudge()));
+        ws.send(JSON.stringify(buildGreetingNudge(settings.voice)));
       }, delay);
       return;
     }
@@ -378,8 +391,15 @@ function handleBrowserMessage(ws: WebSocket, raw: string) {
       }
       setStatus("ringing");
       broadcastAll({ type: "snapshot", snapshot: snapshot() });
-      // Connect to Gemini during the short ring (don't wait serially)
-      void startGeminiSession({ greetAfterMs: RING_MS });
+      voiceSettings = parseVoiceSettings({
+        ...envDefaultVoiceSettings(),
+        ...msg.settings,
+      });
+      // Connect to Gemini during the ring so Nusrat can pick up at RING_MS
+      void startGeminiSession({
+        greetAfterMs: RING_MS,
+        settings: voiceSettings,
+      });
       break;
     }
     case "audio": {

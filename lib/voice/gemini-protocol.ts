@@ -1,6 +1,7 @@
 /** Browser-safe Gemini Live protocol helpers (no Node Buffer). */
 
-import { NUSRAT_GREETING } from "@/lib/kb/troubleshooting";
+import { buildCareGreeting } from "@/lib/kb/troubleshooting";
+import { agentPersonaForVoice } from "@/lib/voice/voice-settings";
 
 export function buildAudioClientMessage(base64Pcm: string) {
   return {
@@ -31,10 +32,12 @@ export function buildToolResponseMessage(
   };
 }
 
-/** Ask Nusrat to speak the greeting after setup completes. */
-export function buildGreetingNudge() {
+/** Ask the desk agent to speak the greeting after setup completes. */
+export function buildGreetingNudge(voice?: string) {
+  const persona = agentPersonaForVoice(voice);
+  const greeting = buildCareGreeting(persona.nameBn);
   return buildSystemNudge(
-    `Softphone just connected. Speak this greeting only, one short breath, then wait for the caller. Do not add extra lines.\n${NUSRAT_GREETING}`,
+    `Softphone just connected. You are ${persona.name} (${persona.nameBn}), a ${persona.gender === "male" ? "man" : "woman"}. Speak this greeting only, one short breath, then wait for the caller. Do not add extra lines. Do not use any other name.\n${greeting}`,
   );
 }
 

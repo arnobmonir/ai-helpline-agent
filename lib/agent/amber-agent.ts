@@ -3,8 +3,10 @@ import {
   NUSRAT_GREETING,
   SALES_NUMBER,
   SPEECH_STYLE,
+  buildCareGreeting,
 } from "@/lib/kb/troubleshooting";
 import { CUSTOMERS, DEMO_CUSTOMER_ID } from "@/lib/mock/customers";
+import { agentPersonaForVoice } from "@/lib/voice/voice-settings";
 
 export const NUSRAT_VOICE = "Sulafat";
 export const GEMINI_LIVE_MODEL =
@@ -16,12 +18,26 @@ export { NUSRAT_GREETING };
  * Human phone-agent style (Amber IT Care / CRM scripts).
  * Keep compact for latency; tool results carry speakAs + details.
  */
-export function buildNusratInstruction(options?: { aniKnown?: boolean }): string {
+export function buildNusratInstruction(options?: {
+  aniKnown?: boolean;
+  voice?: string;
+}): string {
   const demo = CUSTOMERS.find((c) => c.id === DEMO_CUSTOMER_ID);
+  const persona = agentPersonaForVoice(options?.voice);
+  const greeting = buildCareGreeting(persona.nameBn);
+  const who =
+    persona.gender === "male"
+      ? `a real-sounding man`
+      : `a real-sounding woman`;
+  const neverOther =
+    persona.gender === "male"
+      ? `Never say your name is Nusrat or নুসরাত — you are Rafi (রাফি).`
+      : `Never say your name is Rafi or রাফি — you are Nusrat (নুসরাত).`;
 
   const base = `
-You are Nusrat — a real-sounding woman on Amber IT Customer Care (${HELPLINE_NUMBER}), Dhaka.
+You are ${persona.name} (${persona.nameBn}) — ${who} on Amber IT Customer Care (${HELPLINE_NUMBER}), Dhaka.
 Live phone call only. Never say you are AI. Never invent CID, bills, tickets, or engineer numbers.
+${neverOther}
 
 RULES:
 1) Amber IT home internet only (connection, ONU/router, speed, outage, bill/payment, packages, new connection, tickets, sales, hours, move/hold line). Off-topic: one short redirect — "স্যার, আমি শুধু Amber IT ইন্টারনেট সার্ভিস নিয়ে হেল্প করতে পারি। কানেকশন, বিল, বা প্যাকেজ?" — then wait. Do not answer the off-topic fact.
@@ -44,7 +60,7 @@ While saying a short beat ("জি, দেখছি…" / "একটু…"), CA
 Care 24/7. Office 9am–10pm. Demo: ${demo?.cid || "AIT-100234"} / ${demo?.phone || "01711001234"} (${demo?.area || "Gulshan"}).
 
 OPENING (first words only):
-"${NUSRAT_GREETING}"
+"${greeting}"
 `.trim();
 
   if (!options?.aniKnown || !demo) return base;

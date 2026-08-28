@@ -1,5 +1,6 @@
 import { OpsDashboard } from "@/components/ops/OpsDashboard";
 import { AppHeader } from "@/components/layout/AppHeader";
+import { VoiceSettingsButton } from "@/components/softphone/VoiceSettingsButton";
 
 export default function OpsPage() {
   return (
@@ -7,9 +8,12 @@ export default function OpsPage() {
       <AppHeader
         active="ops"
         right={
-          <p className="hidden text-right text-xs text-amber-muted sm:block">
-            Live call · tools · tickets · scene
-          </p>
+          <div className="flex items-center gap-2">
+            <VoiceSettingsButton />
+            <p className="hidden text-right text-xs text-amber-muted sm:block">
+              Live call · tools · tickets · scene
+            </p>
+          </div>
         }
       />
       <OpsDashboard />

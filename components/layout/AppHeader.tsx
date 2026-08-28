@@ -46,7 +46,7 @@ export function AppHeader({
           </Link>
         </nav>
 
-        <div className="flex min-w-0 items-center justify-end">{right}</div>
+        <div className="flex min-w-0 items-center justify-end gap-2">{right}</div>
       </div>
     </header>
   );
