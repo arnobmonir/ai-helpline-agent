@@ -6,6 +6,7 @@ import {
   buildNusratInstruction,
 } from "@/lib/agent/amber-agent";
 import { getScene } from "@/lib/mock/scene";
+import { parseVoiceSettings } from "@/lib/voice/voice-settings";
 
 /**
  * Mint a short-lived Gemini Live ephemeral token for browser → Gemini WS.
@@ -28,11 +29,7 @@ export async function POST(request: Request) {
     body = {};
   }
   const voice =
-    (body &&
-      typeof body === "object" &&
-      "voice" in body &&
-      typeof (body as { voice?: unknown }).voice === "string" &&
-      (body as { voice: string }).voice) ||
+    parseVoiceSettings(body).voice ||
     process.env.GEMINI_LIVE_VOICE ||
     NUSRAT_VOICE;
   const expireTime = new Date(Date.now() + 30 * 60 * 1000).toISOString();
